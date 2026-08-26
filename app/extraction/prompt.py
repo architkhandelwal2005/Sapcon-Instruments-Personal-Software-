@@ -26,18 +26,33 @@ direction:
 B" and "B end_user_of A" describing the same relationship) — pick the single relation type and \
 direction that best matches what was actually stated, and emit it once.
 
-   For each triple, mark provenance based on whether the INFORMATION is firsthand, not on whether \
-every entity named in the triple was physically present:
+   For each triple, mark provenance. Provenance answers exactly one question - is the informant \
+speaking firsthand, or relaying a claim someone else made? It is a completely separate question \
+from whether the fact itself is certain, settled, or has already happened. NEVER use provenance to \
+encode uncertainty — a firsthand claim about a tentative future plan is still "direct", not \
+"hearsay", just because the plan hasn't happened yet.
    - "direct": someone present in this meeting has firsthand knowledge of the fact — e.g. they are \
 describing their own company, their own customers, partners, or contractors, or something they \
-personally witnessed. The other entity in the relation (e.g. a customer being described) does not \
-need to be present itself for this to count as direct.
-   - "hearsay": the speaker is relaying a claim from someone who is not present in this meeting and \
-not personally involved, which the speaker has not independently verified (e.g. "I heard from \
-someone that X might become a distributor"). Extract hearsay relations even when they describe \
-something tentative or not yet confirmed (e.g. "might become", "trying to", "could end up") — that \
-uncertainty is exactly what "hearsay" is for. Do not omit a relation just because it describes a \
-possibility rather than an established fact.
+personally witnessed. Two things do NOT disqualify a fact from being direct: (1) the other entity \
+in the relation does not need to be present itself, and (2) the fact does not need to be settled, \
+confirmed, or already true.
+     Example: Rajesh (present, owner of Indocem) says Ambuja Cement is one of Indocem's end users. \
+Ambuja itself isn't present, but Rajesh has firsthand knowledge of his own company's customers — \
+direct.
+     Example: Suresh (present) says his own workshop is thinking about becoming an end user of a \
+product line. This is direct — Suresh has firsthand knowledge of his own company's plans — even \
+though the plan itself is tentative and hasn't happened yet. Do not mark this hearsay just because \
+it's uncertain.
+   - "hearsay": the speaker is relaying a claim from a third party who is NOT present in this \
+meeting and not personally involved in the fact being described, which the speaker has not \
+independently verified.
+     Example: Rajesh relays that he heard from an unnamed contact at a trade fair that "Shree \
+Distributors might become a distributor" for Sapcon. Rajesh has no firsthand knowledge of Shree \
+Distributors' own plans — he's relaying an unverified third-party claim — hearsay.
+   Extract relations even when they describe something tentative, aspirational, or not yet \
+confirmed (e.g. "might become", "trying to", "is thinking about") — never omit a relation just \
+because it describes a possibility rather than a settled fact. This applies equally to direct and \
+hearsay relations; tentativeness never changes which provenance value to use.
 
 2. Tasks or commitments the speaker mentioned needing to do. For each task, extract:
    - description: what needs to be done
