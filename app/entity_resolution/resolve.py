@@ -47,11 +47,13 @@ def resolve_entity(conn: psycopg.Connection, name: str, entity_type: str, intera
                 return ResolutionResult(entity_id=chosen_id, outcome="confirmed", canonical_name=chosen.canonical_name)
         else:
             entity_id = _create_entity(conn, name, entity_type)
+            top = medium_candidates[0]
+            _flag_for_review(conn, entity_id, top.id, name, entity_type)
             return ResolutionResult(
                 entity_id=entity_id,
                 outcome="ambiguous_created",
                 canonical_name=name,
-                possible_duplicate_of=medium_candidates[0].canonical_name,
+                possible_duplicate_of=top.canonical_name,
             )
 
     entity_id = _create_entity(conn, name, entity_type)
@@ -65,6 +67,22 @@ def _maybe_add_alias(conn: psycopg.Connection, entity_id: str, name: str, canoni
         cur.execute(
             "update entities set aliases = array_append(aliases, %s) where id = %s",
             (name, entity_id),
+        )
+
+
+def _flag_for_review(
+    conn: psycopg.Connection, entity_id: str, possible_duplicate_id: str, mentioned_name: str, entity_type: str
+) -> None:
+    """Durable trace for the review queue - see migrations/0005. Written in
+    the same transaction as the entity itself, so it rolls back together if
+    the enclosing ingest fails."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            insert into entity_review_queue (entity_id, possible_duplicate_of, mentioned_name, entity_type)
+            values (%s, %s, %s, %s)
+            """,
+            (entity_id, possible_duplicate_id, mentioned_name, entity_type),
         )
 
 

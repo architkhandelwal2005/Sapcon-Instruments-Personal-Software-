@@ -1,6 +1,7 @@
 from datetime import date
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -31,7 +32,13 @@ def _with_overdue_flags(tasks) -> list:
 
 
 @router.get("/meetings/{meeting_id}", response_class=HTMLResponse)
-def view_meeting(request: Request, meeting_id: str, corrected: Optional[int] = None, error: Optional[str] = None):
+def view_meeting(
+    request: Request,
+    meeting_id: str,
+    corrected: Optional[int] = None,
+    error: Optional[str] = None,
+    flagged: Optional[str] = None,
+):
     conn = get_connection()
     try:
         data = fetch_meeting_minutes_data(conn, meeting_id)
@@ -42,6 +49,8 @@ def view_meeting(request: Request, meeting_id: str, corrected: Optional[int] = N
     flash_error = False
     if corrected:
         flash = "Correction added."
+        if flagged:
+            flash += f" Needs review: {flagged} (couldn't confidently match, created as new - see the review queue)."
     elif error:
         flash = f"Correction failed: {error}"
         flash_error = True
@@ -81,17 +90,28 @@ async def submit_correction(
         transcript = (transcript + "\n" + transcribed).strip() if transcript else transcribed
 
     if not transcript:
-        return RedirectResponse(f"/meetings/{meeting_id}?error=No+text+or+audio+provided", status_code=303)
+        return RedirectResponse(f"/meetings/{meeting_id}?error={quote('No text or audio provided')}", status_code=303)
+
+    ambiguous: list[str] = []
+
+    def _on_resolved(entry) -> None:
+        if entry.outcome == "ambiguous_created":
+            ambiguous.append(f"{entry.name} (possible duplicate of {entry.possible_duplicate_of})")
 
     conn = get_connection()
     try:
         # interactive=False: this is a web request, not a terminal - the
         # confirm-queue reads from stdin and would hang forever here. See
         # resolve_entity()'s docstring.
-        append_correction(conn, meeting_id, transcript, audio_path=audio_path, interactive=False)
+        append_correction(
+            conn, meeting_id, transcript, audio_path=audio_path, interactive=False, on_resolved=_on_resolved
+        )
     except Exception as exc:
-        return RedirectResponse(f"/meetings/{meeting_id}?error={str(exc)[:200]}", status_code=303)
+        return RedirectResponse(f"/meetings/{meeting_id}?error={quote(str(exc)[:200])}", status_code=303)
     finally:
         conn.close()
 
-    return RedirectResponse(f"/meetings/{meeting_id}?corrected=1", status_code=303)
+    redirect_url = f"/meetings/{meeting_id}?corrected=1"
+    if ambiguous:
+        redirect_url += f"&flagged={quote('; '.join(ambiguous))}"
+    return RedirectResponse(redirect_url, status_code=303)

@@ -22,6 +22,7 @@ class ResolutionLogEntry:
     entity_type: str
     outcome: str
     canonical_name: str
+    possible_duplicate_of: Optional[str] = None
 
 
 @dataclass
@@ -44,7 +45,9 @@ def _resolve_all_entities(
     for entity in entities:
         result = resolve_entity(conn, entity.name, entity.entity_type, interactive=interactive)
         resolved[entity.name] = result
-        entry = ResolutionLogEntry(entity.name, entity.entity_type, result.outcome, result.canonical_name)
+        entry = ResolutionLogEntry(
+            entity.name, entity.entity_type, result.outcome, result.canonical_name, result.possible_duplicate_of
+        )
         log.append(entry)
         if on_resolved:
             on_resolved(entry)
@@ -61,7 +64,9 @@ def _resolve_name(
         return resolved[name].entity_id
     result = resolve_entity(conn, name, fallback_entity_type, interactive=interactive)
     resolved[name] = result
-    entry = ResolutionLogEntry(name, fallback_entity_type, result.outcome, result.canonical_name)
+    entry = ResolutionLogEntry(
+        name, fallback_entity_type, result.outcome, result.canonical_name, result.possible_duplicate_of
+    )
     log.append(entry)
     if on_resolved:
         on_resolved(entry)

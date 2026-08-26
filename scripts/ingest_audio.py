@@ -58,7 +58,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def _print_resolution(entry) -> None:
-    note = f" -> matched existing '{entry.canonical_name}'" if entry.outcome != "created" else " -> new entity"
+    if entry.outcome == "created":
+        note = " -> new entity"
+    elif entry.outcome == "ambiguous_created":
+        note = f" -> new entity, but flagged for review (possible duplicate of '{entry.possible_duplicate_of}')"
+    else:
+        note = f" -> matched existing '{entry.canonical_name}'"
     print(f"  [{entry.outcome}] {entry.name} ({entry.entity_type}){note}")
 
 
