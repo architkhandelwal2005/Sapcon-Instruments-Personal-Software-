@@ -1,11 +1,58 @@
 # Placeholder relation-type vocabulary. Swap this list once you have your
 # uncle's actual terms — nothing else in the extraction pipeline needs to
-# change, since app/extraction/prompt.py reads this file at runtime.
+# change, since app/extraction/prompt.py reads this file at runtime and
+# builds the direction guidance shown to the model from these fields.
+#
+# Each entry needs:
+#   name        - the exact relation_type string stored in the DB
+#   description - states which side is source and which is target, in plain terms
+#   example     - a concrete "A relation_type B" instance
 relation_types:
-  - contractor_for
-  - channel_partner_of
-  - end_user_of
-  - distributor_for
-  - competitor_of
-  - works_at
-  - referred_by
+  - name: contractor_for
+    description: >-
+      A does installation/contracting work for B's products or projects.
+      A is the source, B is the target.
+    example: "Patil Instrumentation Services contractor_for Sapcon Instruments"
+
+  - name: channel_partner_of
+    description: >-
+      A is an official channel partner selling/distributing B's products in a region.
+      A is the source, B is the target.
+    example: "Indocem Engineering channel_partner_of Sapcon Instruments"
+
+  - name: end_user_of
+    description: >-
+      A is the end customer using B's products. A is the source, B is the target —
+      the entity that directly supplied A, which may be Sapcon Instruments itself
+      or an intermediary (a channel partner, distributor, or contractor). Always
+      name the immediate supplier, never skip past an intermediary straight to
+      Sapcon Instruments — preserving that chain is what lets us trace multi-hop
+      paths through the network later.
+    example: "Ambuja Cement end_user_of Indocem Engineering Pvt Ltd"
+
+  - name: distributor_for
+    description: >-
+      A distributes B's products to the market (a broader/independent distribution
+      role, distinct from being a regional channel_partner_of). A is the source, B is
+      the target — the entity whose products are being distributed. Do not use this
+      to describe A's own customers; that is end_user_of instead.
+    example: "Shree Distributors distributor_for Sapcon Instruments"
+
+  - name: competitor_of
+    description: >-
+      A and B compete for the same customers. This is symmetric in meaning, but only
+      extract the direction actually stated in the transcript — never add the
+      mirrored fact yourself.
+    example: "Rival Sensors Ltd competitor_of Sapcon Instruments"
+
+  - name: works_at
+    description: >-
+      A (a person) is employed by, or is the owner/principal of, B (a company).
+      A is the source, B is the target.
+    example: "Rajesh Kumar works_at Indocem Engineering Pvt Ltd"
+
+  - name: referred_by
+    description: >-
+      A was introduced or referred by B. A is the source, B is the target — the
+      person or entity who made the referral.
+    example: "New Contact referred_by Rajesh Kumar"
