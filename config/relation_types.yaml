@@ -1,0 +1,11 @@
+# Placeholder relation-type vocabulary. Swap this list once you have your
+# uncle's actual terms — nothing else in the extraction pipeline needs to
+# change, since app/extraction/prompt.py reads this file at runtime.
+relation_types:
+  - contractor_for
+  - channel_partner_of
+  - end_user_of
+  - distributor_for
+  - competitor_of
+  - works_at
+  - referred_by
