@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}{{ entity.canonical_name }} - Sapcon CRM{% endblock %}
+{% block content %}
+
+<h1>{{ entity.canonical_name }}</h1>
+<div class="meta">
+  <div>{{ entity.entity_type }}</div>
+  {% if entity.aliases %}<div>Also known as: {{ entity.aliases | join(", ") }}</div>{% endif %}
+</div>
+
+<h2>Interaction history</h2>
+<div class="card">
+  {% if history %}
+    <ul class="relation-list">
+      {% for m in history %}
+        <li>
+          <a class="entity-link" href="/meetings/{{ m.id }}">
+            {{ m.meeting_date }}{% if m.primary_contact_name and m.primary_contact_name != entity.canonical_name %} - {{ m.primary_contact_name }}{% endif %}
+          </a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">No meetings yet.</p>
+  {% endif %}
+</div>
+
+<h2>Last conversation</h2>
+<div class="card">
+  {% if last_meeting %}
+    <div class="meta"><a class="entity-link" href="/meetings/{{ last_meeting.meeting_id }}">{{ last_meeting.meeting_date }} &middot; view full minutes</a></div>
+    {% if last_meeting.direct_relations %}
+      <ul class="relation-list">
+        {% for r in last_meeting.direct_relations %}
+          <li>{{ r.source }} <strong>{{ r.relation_type }}</strong> {{ r.target }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty">No relationships recorded in that meeting.</p>
+    {% endif %}
+  {% else %}
+    <p class="empty">No meetings yet.</p>
+  {% endif %}
+</div>
+
+<h2>Open commitments</h2>
+<div class="card">
+  {% if commitments %}
+    <ul class="task-list">
+      {% for t in commitments %}
+        <li class="task-item">
+          {{ t.description }}
+          <div class="task-due{% if t.overdue %} task-overdue{% endif %}">
+            {% if t.due_date %}
+              {% if t.overdue %}Overdue - was due {{ t.due_date }}{% else %}Due {{ t.due_date }}{% endif %}
+            {% else %}
+              No due date
+            {% endif %}
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">No open commitments.</p>
+  {% endif %}
+</div>
+
+<h2>Connections</h2>
+<div class="card">
+  {% if connections %}
+    <ul class="relation-list">
+      {% for c in connections %}
+        <li>
+          {% if c.direction == "out" %}
+            {{ entity.canonical_name }} <strong>{{ c.relation_type }}</strong>
+            <a class="entity-link" href="/entities/{{ c.other_id }}">{{ c.other_name }}</a>
+          {% else %}
+            <a class="entity-link" href="/entities/{{ c.other_id }}">{{ c.other_name }}</a>
+            <strong>{{ c.relation_type }}</strong> {{ entity.canonical_name }}
+          {% endif %}
+          <span class="badge badge-{{ c.provenance }}">{{ c.provenance }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">No known connections yet.</p>
+  {% endif %}
+</div>
+
+{% endblock %}

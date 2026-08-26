@@ -8,8 +8,10 @@ import psycopg
 @dataclass
 class RelationRow:
     source: str
+    source_id: str
     relation_type: str
     target: str
+    target_id: str
     provenance: str
 
 
@@ -17,6 +19,7 @@ class RelationRow:
 class TaskRow:
     description: str
     related_entity_name: Optional[str]
+    related_entity_id: Optional[str]
     due_date: Optional[date]
     status: str
 
@@ -29,6 +32,7 @@ class MeetingMinutesData:
     audio_url: Optional[str]
     raw_transcript: Optional[str]
     primary_contact_name: Optional[str]
+    primary_contact_id: Optional[str]
     relations: list[RelationRow]
     tasks: list[TaskRow]
 
@@ -49,7 +53,7 @@ def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> Mee
     with conn.cursor() as cur:
         cur.execute(
             """
-            select m.meeting_date, m.location, m.audio_url, m.raw_transcript, pc.canonical_name
+            select m.meeting_date, m.location, m.audio_url, m.raw_transcript, pc.canonical_name, pc.id
             from meetings m
             left join entities pc on pc.id = m.primary_contact_id
             where m.id = %s
@@ -59,11 +63,11 @@ def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> Mee
         row = cur.fetchone()
         if row is None:
             raise ValueError(f"No meeting found with id {meeting_id}")
-        meeting_date, location, audio_url, raw_transcript, primary_contact_name = row
+        meeting_date, location, audio_url, raw_transcript, primary_contact_name, primary_contact_id = row
 
         cur.execute(
             """
-            select e1.canonical_name, r.relation_type, e2.canonical_name, r.provenance
+            select e1.canonical_name, e1.id, r.relation_type, e2.canonical_name, e2.id, r.provenance
             from relations r
             join entities e1 on e1.id = r.source_id
             join entities e2 on e2.id = r.target_id
@@ -72,11 +76,14 @@ def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> Mee
             """,
             (meeting_id,),
         )
-        relations = [RelationRow(source, relation_type, target, provenance) for source, relation_type, target, provenance in cur.fetchall()]
+        relations = [
+            RelationRow(source, str(source_id), relation_type, target, str(target_id), provenance)
+            for source, source_id, relation_type, target, target_id, provenance in cur.fetchall()
+        ]
 
         cur.execute(
             """
-            select t.description, e.canonical_name, t.due_date, t.status
+            select t.description, e.canonical_name, e.id, t.due_date, t.status
             from tasks t
             left join entities e on e.id = t.related_entity_id
             where t.meeting_id = %s
@@ -84,7 +91,10 @@ def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> Mee
             """,
             (meeting_id,),
         )
-        tasks = [TaskRow(description, related_name, due_date, status) for description, related_name, due_date, status in cur.fetchall()]
+        tasks = [
+            TaskRow(description, related_name, (str(related_id) if related_id else None), due_date, status)
+            for description, related_name, related_id, due_date, status in cur.fetchall()
+        ]
 
     return MeetingMinutesData(
         meeting_id=meeting_id,
@@ -93,6 +103,7 @@ def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> Mee
         audio_url=audio_url,
         raw_transcript=raw_transcript,
         primary_contact_name=primary_contact_name,
+        primary_contact_id=(str(primary_contact_id) if primary_contact_id else None),
         relations=relations,
         tasks=tasks,
     )

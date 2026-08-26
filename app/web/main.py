@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.db import get_connection
-from app.web.routes import meetings
+from app.web.routes import entities, meetings
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -19,6 +19,7 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 app.include_router(meetings.router)
+app.include_router(entities.router)
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -1,4 +1,3 @@
-from datetime import date
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
@@ -10,25 +9,10 @@ from fastapi.templating import Jinja2Templates
 from app.db import get_connection
 from app.ingestion.pipeline import append_correction
 from app.minutes.generate import fetch_meeting_minutes_data
+from app.web.helpers import with_overdue_flags
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
-
-
-def _with_overdue_flags(tasks) -> list:
-    today = date.today()
-    out = []
-    for t in tasks:
-        out.append(
-            {
-                "description": t.description,
-                "related_entity_name": t.related_entity_name,
-                "due_date": t.due_date,
-                "status": t.status,
-                "overdue": bool(t.due_date and t.due_date < today and t.status != "done"),
-            }
-        )
-    return out
 
 
 @router.get("/meetings/{meeting_id}", response_class=HTMLResponse)
@@ -60,7 +44,7 @@ def view_meeting(
         "meeting.html",
         {
             "data": data,
-            "tasks": _with_overdue_flags(data.tasks),
+            "tasks": with_overdue_flags(data.tasks),
             "flash": flash,
             "flash_error": flash_error,
         },
