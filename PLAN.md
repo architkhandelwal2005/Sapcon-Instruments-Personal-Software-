@@ -3,16 +3,33 @@
 ## Stack choice: Python (FastAPI) + Supabase Postgres
 
 **Why Python over Node/TS:**
-- Whisper API + Anthropic SDK + trigram/fuzzy-matching libraries (`rapidfuzz`, or Postgres `pg_trgm` directly) are all first-class in Python, and the extraction pipeline is the riskiest/most iterative part of this build — a REPL-friendly language matters more here than framework ergonomics.
+- Self-hosted Whisper (`faster-whisper`), the Anthropic SDK, `sentence-transformers`, and trigram/fuzzy-matching libraries (`rapidfuzz`, or Postgres `pg_trgm` directly) are all first-class in Python, and the extraction pipeline is the riskiest/most iterative part of this build — a REPL-friendly language matters more here than framework ergonomics.
 - No frontend framework needed yet (step 5 is a "minimal read surface" — likely server-rendered HTML or a CLI/Streamlit view, not an SPA), so there's no forcing function toward a JS backend for isomorphic code-sharing.
 - FastAPI gives us Pydantic models for free, which double as the *forced structured output* schema for the Claude extraction call (same model, two jobs: API contract + LLM output contract).
 - Your uncle is not a developer and won't touch this repo — implementation language is purely our call, optimizing for build speed and pipeline debuggability.
 - Supabase's Python client is solid and RLS/auth (needed eventually per your schema comment on `assigned_to`) works the same regardless of backend language.
 
+## Cost policy (added 2026-08-26)
+
+Default to open-source/free tools over paid APIs except where quality genuinely depends on it:
+
+| Piece | Tool | Paid alternative avoided |
+|---|---|---|
+| Transcription | self-hosted `faster-whisper`, run locally in-process (no server) | OpenAI Whisper API |
+| Entity-resolution matching | local `sentence-transformers/all-MiniLM-L6-v2` embeddings, as a second signal alongside `pg_trgm` | a paid embedding API (OpenAI/Cohere) |
+| Extraction | swappable provider (`EXTRACTION_PROVIDER` env var): **Gemini free tier for dev**, **Claude Haiku 4.5 for production** | — |
+| Hosting/orchestration | no server at all needed yet (see below); free-tier options only when one is needed | a paid VM/server |
+
+Reasoning per line item, plus where I'd push back or refine — see **Flags on the cost policy** below.
+
+> **HARD GATE — added 2026-08-26, do not forget this:** real meeting recordings/transcripts must **never** go through the free-tier Gemini extraction path. Google's free tier (AI Studio) permits using submitted content to improve their models — fine for the synthetic test transcripts in `tests/fixtures/`, not acceptable for real business/relationship data about real companies and contacts. Before the first real recording is processed, switch `EXTRACTION_PROVIDER=anthropic` in `.env` (Anthropic credit will be added at that point). Until that switch happens, `EXTRACTION_PROVIDER` must stay `gemini` for dev/testing only.
+
 **Supporting choices:**
 - `psycopg`/`sqlalchemy` (or just the Supabase Python client) for DB access; raw SQL for the recursive CTE traversal query since ORMs fight you on recursive CTEs.
-- Migrations via plain numbered `.sql` files run through Supabase CLI (`supabase migration new`) — no need for Alembic/heavier migration tooling at this scale.
-- `pg_trgm` extension in Postgres for trigram similarity (native, no external library needed for the fuzzy match itself — Python just calls `SELECT similarity(...)`).
+- Migrations via plain numbered `.sql` files run through a small local script (`scripts/run_migrations.py`) rather than the Supabase CLI — avoids a second login flow, tracks applied files in a `schema_migrations` table.
+- `pg_trgm` extension in Postgres for trigram similarity (native, no external library needed for the fuzzy match itself — Python just calls `SELECT similarity(...)`), as the primary/first-pass entity-resolution signal.
+- `sentence-transformers/all-MiniLM-L6-v2` (downloaded once, runs locally, no API calls) as a secondary semantic-similarity signal for entity resolution, computed and compared in Python — at hundreds-of-entities scale a brute-force cosine-similarity scan is fast enough, so no `pgvector` extension or vector column needed. Revisit only if the entity count grows into the tens of thousands, which is unlikely for one person's contact base.
+- `faster-whisper` for transcription, called directly from the ingestion script — since capture is local audio files for now (per the spec), there's no server involved at all: transcription happens in the same process as everything else, on your own machine, when you run `scripts/ingest_audio.py`.
 - Config for the relation-type vocabulary lives in one YAML/JSON file (`config/relation_types.yaml`) imported into the extraction prompt template — swapping vocabulary is editing a list, not the prompt logic.
 
 ## Proposed file/folder structure
@@ -33,14 +50,14 @@ Sapcon Personal Software/
     db.py                         # connection/session handling
     models.py                     # Pydantic models (entities, meetings, relations, tasks)
     transcription/
-      whisper_client.py
+      whisper_client.py           # wraps faster-whisper, runs in-process, no server
     extraction/
       prompt.py                   # builds the extraction prompt from config/relation_types.yaml
       schema.py                   # forced-output Pydantic schema for the Haiku call
       extractor.py                # one function: transcript -> structured triples+tasks
       resolve_dates.py            # relative_due -> absolute date, in app code
     entity_resolution/
-      matcher.py                  # trigram scoring against existing entities
+      matcher.py                  # trigram score (primary) + local MiniLM embedding score (secondary) against existing entities
       confirm_queue.py            # CLI prompt for medium-confidence matches
     graph/
       traversal.py                # recursive CTE wrapper: how X connects to Y
@@ -67,9 +84,9 @@ Sapcon Personal Software/
 
 1. **Schema + migrations** — write the 4 tables exactly as specified, plus `pg_trgm` extension + a trigram index on `entities.canonical_name` (and probably a GIN index on `aliases`) since step 3 depends on fast similarity search. Apply to a fresh Supabase project. Deliverable: migrations run clean, tables exist, you can eyeball them in Supabase Studio.
 
-2. **Extraction pipeline against local test audio** — Whisper transcription -> Haiku 4.5 structured extraction -> print raw JSON output (no DB writes yet). This is where we validate the prompt against your real recordings before anything downstream depends on its output shape. Deliverable: run `scripts/ingest_audio.py <file>` on your 5-10 recordings, inspect extracted triples/tasks/relative-dates side by side with the transcript, iterate on the prompt until extraction quality looks right to you.
+2. **Extraction pipeline against local test audio** — local `faster-whisper` transcription -> Haiku 4.5 structured extraction -> print raw JSON output (no DB writes yet). This is where we validate the prompt against your real recordings before anything downstream depends on its output shape. Deliverable: run `scripts/ingest_audio.py <file>` on your 5-10 recordings, inspect extracted triples/tasks/relative-dates side by side with the transcript, iterate on the prompt until extraction quality looks right to you.
 
-3. **Entity resolution + confirm-queue** — take step 2's output, resolve each mentioned entity against `entities` table via trigram score, auto-link/queue/create per your thresholds, write confirmed rows to DB. Deliverable: run the same test recordings end-to-end into the DB; walk through the CLI confirm-queue live with you on ambiguous matches to tune thresholds.
+3. **Entity resolution + confirm-queue** — take step 2's output, resolve each mentioned entity against `entities` table via trigram score plus a local MiniLM embedding score, auto-link/queue/create per your thresholds, write confirmed rows to DB. Deliverable: run the same test recordings end-to-end into the DB; walk through the CLI confirm-queue live with you on ambiguous matches to tune thresholds.
 
 4. **Graph queries** — recursive CTE for path-finding between two entities, plain aggregate query for degree/centrality. Deliverable: query "how does X connect to Y" and get a real path back from your test data; query degree ranking and see it match your intuition about who's central.
 
@@ -102,9 +119,24 @@ I'll stop after each step for you to test on real data before starting the next 
 
 8. **Where does dedup happen if the same meeting produces the same triple twice** (e.g. transcript rambles and Haiku extracts "A works_at B" twice)? I'll add an application-level dedup check (same source/target/relation_type/meeting_id) before insert rather than a DB unique constraint, since a unique constraint on that tuple would also block legitimate re-statement across *different* meetings (which is fine and expected — it's how corroboration/promotion works).
 
+## Flags on the cost policy
+
+1. **Transcription — no quality tradeoff here, full agreement.** OpenAI's Whisper API runs the same open-source Whisper model weights available to self-host — it isn't a distinct, improved model. Self-hosting via `faster-whisper` (CTranslate2-based, pure Python install, no build toolchain needed on Windows) should match API quality exactly, at zero marginal cost. I'd start with the `small` or `medium` multilingual model — your uncle's meetings likely include Hindi/English code-switching, and Whisper's multilingual models handle that reasonably; we'll confirm against your real recordings in step 2 and size up to `large-v3` only if accuracy on code-switched audio needs it. No server needed at all right now: since capture is local files (not remote uploads), transcription just runs in-process on your machine when you invoke the ingestion script — the "persistent process on a free-tier VM" contingency in your policy doesn't apply until we build remote capture (out of scope per the spec).
+
+2. **Entity resolution — I'd add one more free tool, not swap to embeddings alone.** `all-MiniLM-L6-v2` embeddings are good at *semantic* similarity (different wording, same meaning) but not at what I expect to be the dominant failure mode here: **spelling/transliteration variants of Indian proper nouns** (e.g. "Shrivastava" vs "Srivastava", "Rajesh" vs "Raj"). Trigram similarity (already in the plan) actually handles that better than embeddings do, since it's character-level. A **phonetic algorithm (double metaphone)** — also free, no model download, a few lines of code — targets that specific failure mode more directly than embeddings would. My plan: keep trigram as the primary signal, add double metaphone as a cheap second signal, and hold off on installing `sentence-transformers` (which pulls in `torch`, a heavy dependency — hundreds of MB) until step 3 testing against your real data shows trigram+phonetic actually missing matches that embeddings would catch. If you'd rather I just build the embedding path from the start since you already know you want it, say so and I'll add it in step 3 directly instead of gating on evidence of need.
+
+3. **Hosting/orchestration — Supabase Edge Functions don't fit this stack; flagging before it causes a wasted detour.** Edge Functions run on Deno (TypeScript/JavaScript only) — they can't execute `faster-whisper`, `sentence-transformers`, or any of our Python pipeline code. So they're not a like-for-like substitute for "a separate paid server" here; adopting them would mean rewriting the core pipeline in TypeScript, which contradicts the Python stack rationale above. Bigger point: **we don't need any server or hosting decision for steps 1–6.** Capture is local audio files per the spec, so everything (transcription, extraction, entity resolution, graph queries) runs as local Python scripts against Supabase Postgres + the Anthropic API — no persistent process, no hosting cost, paid or free. The only step that might eventually want a persistent surface is step 5 (minimal read surface), and since this is a personal prototype you're running yourself for now (see project memory on prototype-vs-production), a locally-run CLI or `uvicorn`/Streamlit dev server is enough — nothing to deploy. If a real hosting need shows up later (e.g. once remote capture like WhatsApp is in scope, which is explicitly deferred), I'd recommend a free-tier host that actually runs Python (Render/Fly.io free tier) over Edge Functions, and reserve that decision until it's real.
+
 ## Decisions locked in
 
-- **Supabase project**: not created yet. Step 1 includes creating it and walking through getting the connection string / service key into `.env`.
-- **Test recordings**: not available yet. Step 2 will build/validate the extraction pipeline against synthetic/sample transcripts first; real recordings swap in whenever you send them (can happen mid- or post-step-2 without changing the pipeline).
+- **Supabase project**: created, migrations applied (step 1 done).
+- **Test recordings**: not available yet. Step 2 built/validated the extraction pipeline against synthetic sample transcripts (`tests/fixtures/`); real recordings swap in whenever you send them — subject to the **HARD GATE** above (Anthropic only, never free-tier Gemini, once real data is involved).
 - **Tooling**: `pyproject.toml` + `uv`, no override.
 - **Hearsay independence** and **degree/centrality**: resolved above (ambiguities 2 and 7).
+- **Extraction provider**: swappable via `EXTRACTION_PROVIDER` env var (`gemini` for dev, `anthropic` for production) — see cost policy and hard gate above.
+- **Relation-type direction correctness (step 2 review, 2026-08-26)**: an early pass produced mirrored/reversed-direction triples for the same fact (e.g. both `A distributor_for B` and `B end_user_of A`) and inconsistent direct/hearsay labeling. Fixed by: (1) giving each relation type in `config/relation_types.yaml` an explicit direction description + concrete example, consumed by the prompt; (2) instructing the model not to emit mirrored duplicate triples; (3) redefining direct/hearsay around whether the *informant* has firsthand knowledge, not whether every named entity was physically present; (4) setting `temperature=0` on both providers, since structured extraction should be deterministic. Verified stable across repeated runs on both fixtures after the fix.
+- **Standard validation method for extraction quality: re-run 3x and check for drift, not a one-time pass.** This is how the direction/hearsay-flakiness bugs above were actually caught — a single run looked fine and hid a bug that only 2 of 3 repeated runs exposed. `temperature=0` reduces but does not eliminate run-to-run variance. This applies to real recordings too, not just synthetic fixtures: before trusting an extraction from a real meeting recap (especially early on, or after any prompt/config change), re-run it a few times and check the triples/tasks/dates are stable, not just plausible-looking on one pass.
+- **Step 3 (entity resolution) done, 2026-08-26.** Extraction schema gained an `entities` list (name + type) so `entities.entity_type` has somewhere to come from — the model classifies each mentioned entity once, in the same call. `app/entity_resolution/` implements trigram+phonetic scoring, the confirm-queue CLI, and DB writes; `scripts/ingest_audio.py` now does a full ingest (meeting + relations + tasks) by default, with `--dry-run` to fall back to step 2's print-only behavior. Verified end-to-end on both fixtures: auto-linking, the confirm-queue (both the link and reject-and-create-new paths), and alias recording all work; the cross-meeting hearsay corroboration case (`Shree Distributors` reported independently in both fixtures) resolved to the same entity row as intended, exactly what step 7 will need. Also noted `gemini-2.5-flash` had a 20-req/day free-tier cap and has since been superseded — default Gemini model bumped to `gemini-3.5-flash-lite`.
+- **Note: the live Supabase project now has the two fixture meetings in it** (test/synthetic data, not real). Fine to leave for continued dev, but say the word before real data starts flowing if you want a clean slate — a quick reset script (truncate all 4 tables) takes two minutes to write.
+- **Failure handling added, 2026-08-26**: `migrations/0003_ingestion_failures.sql` + `app/ingestion/failures.py`. Any failure in `scripts/ingest_audio.py` past DB-connect (extraction, resolution, or the writes themselves) logs a loud stderr banner, classifies the error (`rate_limit`/`network_error`/`api_error`/`validation_error`/`unknown_error`, checked against the real installed SDK exception classes), persists a retryable row to `ingestion_failures`, falls back to a local JSON file if the DB itself is unreachable, and exits non-zero. Verified with a real forced failure: correct classification, zero partial writes (rollback confirmed via row counts), non-zero exit.
+- **Step 4 (graph/contour queries) done, 2026-08-26.** `app/graph/traversal.py`: recursive-CTE shortest path between two entities, treating relations as traversable in either direction (connectivity, not directional flow), while each step still records the real relation_type/direction/provenance so a path reads like an explanation, not just a node list. `app/graph/centrality.py`: both metrics from ambiguity #7 — coarse total degree and relation-type+direction-specific counts — with one correctness fix baked in: both dedupe to **distinct** `(source, relation_type, target)` edges before counting, since the same fact can be inserted as multiple relation rows (one per corroborating meeting, needed for step 7) and a raw row count would inflate degree for anything mentioned repeatedly rather than measuring actual connectivity. Verified against real data: multi-hop paths correct in both directions (including a 4-hop path requiring two reversed traversals), same-entity and no-path-within-depth edge cases correct, and the dedup fix confirmed directly (2 raw corroborating rows for the same edge correctly counted as degree 1, not 2). `scripts/graph_query.py` exposes `path`, `degree`, and `relation-counts` subcommands.
