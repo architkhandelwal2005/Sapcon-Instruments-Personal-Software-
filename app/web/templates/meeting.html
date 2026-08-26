@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Meeting {{ data.meeting_date }} - {{ data.primary_contact_name or "Sapcon CRM" }}{% endblock %}
+{% block content %}
+
+{% if flash %}
+  <div class="flash{% if flash_error %} error{% endif %}">{{ flash }}</div>
+{% endif %}
+
+<h1>{{ data.primary_contact_name or "Meeting" }}</h1>
+<div class="meta">
+  <div>{{ data.meeting_date }}{% if data.location %} &middot; {{ data.location }}{% endif %}</div>
+</div>
+
+<h2>Relationships</h2>
+<div class="card">
+  {% if data.direct_relations or data.hearsay_relations %}
+    <ul class="relation-list">
+      {% for r in data.direct_relations %}
+        <li>
+          {{ r.source }} <strong>{{ r.relation_type }}</strong> {{ r.target }}
+          <span class="badge badge-direct">direct</span>
+        </li>
+      {% endfor %}
+      {% for r in data.hearsay_relations %}
+        <li>
+          {{ r.source }} <strong>{{ r.relation_type }}</strong> {{ r.target }}
+          <span class="badge badge-hearsay">hearsay</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">Nothing extracted yet.</p>
+  {% endif %}
+</div>
+
+<h2>Tasks</h2>
+<div class="card">
+  {% if tasks %}
+    <ul class="task-list">
+      {% for t in tasks %}
+        <li class="task-item">
+          {{ t.description }}
+          {% if t.related_entity_name %}<div class="task-ref">re: {{ t.related_entity_name }}</div>{% endif %}
+          <div class="task-due{% if t.overdue %} task-overdue{% endif %}">
+            {% if t.due_date %}
+              {% if t.overdue %}Overdue - was due {{ t.due_date }}{% else %}Due {{ t.due_date }}{% endif %}
+            {% else %}
+              No due date
+            {% endif %}
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">No tasks extracted.</p>
+  {% endif %}
+</div>
+
+<details class="transcript">
+  <summary>Raw transcript</summary>
+  <pre>{{ data.raw_transcript or "(no transcript stored)" }}</pre>
+</details>
+
+<h2>Add a correction</h2>
+<p class="meta">Something missing or wrong above? Add a follow-up note (typed, or record a voice note) - it goes through the same extraction pipeline and appends to this meeting.</p>
+<form class="correction-form" method="post" action="/meetings/{{ data.meeting_id }}/correct" enctype="multipart/form-data">
+  <textarea name="text" placeholder="Type a correction note..."></textarea>
+  <input type="file" name="audio" accept="audio/*">
+  <button type="submit">Submit correction</button>
+</form>
+
+{% endblock %}

@@ -1,0 +1,207 @@
+/* Hand-rolled, mobile-first. No external fonts/CDN - needs to work with
+   patchy connectivity while traveling. */
+
+:root {
+  --bg: #ffffff;
+  --text: #1a1a1a;
+  --muted: #6b6b6b;
+  --border: #e2e2e2;
+  --accent: #1a5f3f;
+  --hearsay: #8a5a00;
+  --hearsay-bg: #fff6e5;
+  --overdue: #b3261e;
+  --overdue-bg: #fdecea;
+  --card-bg: #f7f7f7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+header.site-header {
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+header.site-header a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 1rem 1rem 3rem;
+}
+
+h1 {
+  font-size: 1.4rem;
+  margin: 0 0 0.25rem;
+}
+
+h2 {
+  font-size: 1.1rem;
+  margin: 1.5rem 0 0.5rem;
+  color: var(--accent);
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 0.95rem;
+  margin-bottom: 1rem;
+}
+
+.meta div {
+  margin: 0.15rem 0;
+}
+
+.card {
+  background: var(--card-bg);
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+ul.relation-list, ul.task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+ul.relation-list li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+ul.relation-list li:last-child {
+  border-bottom: none;
+}
+
+.badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  margin-left: 0.5rem;
+  vertical-align: middle;
+}
+
+.badge-hearsay {
+  background: var(--hearsay-bg);
+  color: var(--hearsay);
+}
+
+.badge-direct {
+  background: #e8f3ee;
+  color: var(--accent);
+}
+
+.task-item {
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.task-item:last-child {
+  border-bottom: none;
+}
+
+.task-due {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.task-overdue {
+  color: var(--overdue);
+  font-weight: 600;
+}
+
+.task-ref {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+details.transcript summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 0.5rem 0;
+}
+
+details.transcript pre {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: inherit;
+  font-size: 0.95rem;
+  background: var(--card-bg);
+  padding: 0.9rem;
+  border-radius: 10px;
+}
+
+form.correction-form textarea {
+  width: 100%;
+  min-height: 100px;
+  font-size: 1rem;
+  font-family: inherit;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  resize: vertical;
+}
+
+form.correction-form input[type="file"] {
+  margin-top: 0.5rem;
+  width: 100%;
+}
+
+form.correction-form button {
+  margin-top: 0.75rem;
+  font-size: 1rem;
+  padding: 0.6rem 1.2rem;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+}
+
+.empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.flash {
+  background: #e8f3ee;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 0.7rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.flash.error {
+  background: var(--overdue-bg);
+  border-color: var(--overdue);
+}
+
+.entity-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.entity-link:hover {
+  text-decoration: underline;
+}

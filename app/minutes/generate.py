@@ -1,15 +1,51 @@
+from dataclasses import dataclass
+from datetime import date
+from typing import Optional
+
 import psycopg
 
 
-def generate_minutes(conn: psycopg.Connection, meeting_id: str) -> str:
-    """Render a meeting's stored relations/tasks into readable minutes.
+@dataclass
+class RelationRow:
+    source: str
+    relation_type: str
+    target: str
+    provenance: str
 
-    This is a pure formatter over rows already in the DB - no LLM call, no
-    independent summarization of the transcript. The minutes can never say
-    anything the graph doesn't already contain: if something's missing here,
-    it's missing from the graph, not just from this summary, so a correction
-    made from reading the minutes fixes the real data.
-    """
+
+@dataclass
+class TaskRow:
+    description: str
+    related_entity_name: Optional[str]
+    due_date: Optional[date]
+    status: str
+
+
+@dataclass
+class MeetingMinutesData:
+    meeting_id: str
+    meeting_date: date
+    location: Optional[str]
+    audio_url: Optional[str]
+    raw_transcript: Optional[str]
+    primary_contact_name: Optional[str]
+    relations: list[RelationRow]
+    tasks: list[TaskRow]
+
+    @property
+    def direct_relations(self) -> list[RelationRow]:
+        return [r for r in self.relations if r.provenance == "direct"]
+
+    @property
+    def hearsay_relations(self) -> list[RelationRow]:
+        return [r for r in self.relations if r.provenance == "hearsay"]
+
+
+def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> MeetingMinutesData:
+    """The single source of truth for what a meeting's minutes contain -
+    used both to render the stored plaintext minutes (generate_minutes
+    below) and the web app's HTML meeting view, so both are guaranteed to
+    show exactly the same underlying data, just formatted differently."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -36,7 +72,7 @@ def generate_minutes(conn: psycopg.Connection, meeting_id: str) -> str:
             """,
             (meeting_id,),
         )
-        relations = cur.fetchall()
+        relations = [RelationRow(source, relation_type, target, provenance) for source, relation_type, target, provenance in cur.fetchall()]
 
         cur.execute(
             """
@@ -48,37 +84,59 @@ def generate_minutes(conn: psycopg.Connection, meeting_id: str) -> str:
             """,
             (meeting_id,),
         )
-        tasks = cur.fetchall()
+        tasks = [TaskRow(description, related_name, due_date, status) for description, related_name, due_date, status in cur.fetchall()]
+
+    return MeetingMinutesData(
+        meeting_id=meeting_id,
+        meeting_date=meeting_date,
+        location=location,
+        audio_url=audio_url,
+        raw_transcript=raw_transcript,
+        primary_contact_name=primary_contact_name,
+        relations=relations,
+        tasks=tasks,
+    )
+
+
+def generate_minutes(conn: psycopg.Connection, meeting_id: str) -> str:
+    """Render a meeting's stored relations/tasks into readable plaintext
+    minutes (stored on meetings.minutes; also what the CLI prints).
+
+    This is a pure formatter over rows already in the DB - no LLM call, no
+    independent summarization of the transcript. The minutes can never say
+    anything the graph doesn't already contain: if something's missing here,
+    it's missing from the graph, not just from this summary, so a correction
+    made from reading the minutes fixes the real data.
+    """
+    data = fetch_meeting_minutes_data(conn, meeting_id)
 
     lines = [
         "MEETING MINUTES",
-        f"Meeting ID     : {meeting_id}",
-        f"Date           : {meeting_date}",
-        f"Primary contact: {primary_contact_name or '(none)'}",
-        f"Location       : {location or '(not recorded)'}",
+        f"Meeting ID     : {data.meeting_id}",
+        f"Date           : {data.meeting_date}",
+        f"Primary contact: {data.primary_contact_name or '(none)'}",
+        f"Location       : {data.location or '(not recorded)'}",
     ]
-    if audio_url:
-        lines.append(f"Audio file     : {audio_url}")
+    if data.audio_url:
+        lines.append(f"Audio file     : {data.audio_url}")
 
     lines += ["", "RELATIONSHIPS"]
-    direct = [r for r in relations if r[3] == "direct"]
-    hearsay = [r for r in relations if r[3] == "hearsay"]
-    if direct:
+    if data.direct_relations:
         lines.append("  Direct:")
-        lines += [f"    - {source} {relation_type} {target}" for source, relation_type, target, _ in direct]
-    if hearsay:
+        lines += [f"    - {r.source} {r.relation_type} {r.target}" for r in data.direct_relations]
+    if data.hearsay_relations:
         lines.append("  Hearsay (unverified):")
-        lines += [f"    - {source} {relation_type} {target}" for source, relation_type, target, _ in hearsay]
-    if not relations:
+        lines += [f"    - {r.source} {r.relation_type} {r.target}" for r in data.hearsay_relations]
+    if not data.relations:
         lines.append("  (none extracted)")
 
     lines += ["", "TASKS"]
-    if tasks:
-        for description, related_name, due_date, status in tasks:
-            due_str = f"due {due_date}" if due_date else "no due date"
-            ref = f" -- re: {related_name}" if related_name else ""
-            marker = "x" if status == "done" else " "
-            lines.append(f"  [{marker}] {description} ({due_str}){ref}")
+    if data.tasks:
+        for t in data.tasks:
+            due_str = f"due {t.due_date}" if t.due_date else "no due date"
+            ref = f" -- re: {t.related_entity_name}" if t.related_entity_name else ""
+            marker = "x" if t.status == "done" else " "
+            lines.append(f"  [{marker}] {t.description} ({due_str}){ref}")
     else:
         lines.append("  (none extracted)")
 
@@ -89,7 +147,7 @@ def generate_minutes(conn: psycopg.Connection, meeting_id: str) -> str:
         "it's missing from the graph, not just this summary; correct it with a follow-up",
         "voice note appended to this meeting)",
         "",
-        raw_transcript or "(no transcript stored)",
+        data.raw_transcript or "(no transcript stored)",
     ]
 
     return "\n".join(lines)

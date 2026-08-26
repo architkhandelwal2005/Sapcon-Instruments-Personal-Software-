@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Sapcon CRM{% endblock %}
+{% block content %}
+
+<h1>Meetings</h1>
+<div class="card">
+  {% if meetings %}
+    <ul class="relation-list">
+      {% for m in meetings %}
+        <li>
+          <a class="entity-link" href="/meetings/{{ m.id }}">{{ m.meeting_date }} - {{ m.primary_contact_name or "(no contact)" }}</a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">No meetings yet.</p>
+  {% endif %}
+</div>
+
+{% endblock %}
