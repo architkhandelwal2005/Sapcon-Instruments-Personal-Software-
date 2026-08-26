@@ -1,7 +1,10 @@
-"""Ingest one meeting: transcribe audio (or use a text transcript) ->
-extract structured entities/relationships/tasks -> resolve entities against
-the DB -> resolve relative due dates -> write meeting/relations/tasks rows ->
-generate and store minutes.
+"""CLI entrypoint - a thin wrapper around app.ingestion.pipeline (shared with
+the web app's correction form, so both go through one code path).
+
+Transcribe audio (or use a text transcript) -> extract structured
+entities/relationships/tasks -> resolve entities against the DB -> resolve
+relative due dates -> write meeting/relations/tasks rows -> generate and
+store minutes.
 
 Use --dry-run to just print the extraction JSON without touching the DB
 (useful while iterating on the prompt).
@@ -9,14 +12,13 @@ Use --dry-run to just print the extraction JSON without touching the DB
 Use --append-to-meeting <id> for a correction: the primary path for fixing
 missed/wrong extractions is another voice note that goes back through this
 same pipeline and appends relations/tasks to the existing meeting, rather
-than creating a new one. Reuses meeting_date/primary_contact from the
-original meeting; regenerates minutes afterward.
+than creating a new one.
 """
 
 import argparse
 import json
 import sys
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -26,11 +28,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app.db import get_connection
-from app.entity_resolution.resolve import resolve_entity
 from app.extraction.extractor import extract
 from app.extraction.resolve_dates import resolve_due_date
-from app.ingestion.failures import record_failure
-from app.minutes.generate import store_minutes
+from app.ingestion.pipeline import append_correction, ingest_new_meeting
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,46 +57,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def resolve_all_entities(conn, entities) -> dict[str, "object"]:
-    """Returns {extracted_name: ResolutionResult}."""
-    resolved = {}
-    for entity in entities:
-        result = resolve_entity(conn, entity.name, entity.entity_type)
-        resolved[entity.name] = result
-        note = f" -> matched existing '{result.canonical_name}'" if result.outcome != "created" else " -> new entity"
-        print(f"  [{result.outcome}] {entity.name} ({entity.entity_type}){note}")
-    return resolved
-
-
-def resolve_name(conn, resolved: dict, name: str, fallback_entity_type: str = "company"):
-    """Look up an already-resolved entity by name; if a relationship/task
-    references a name that wasn't in the entities list (extraction
-    inconsistency), resolve it on the fly instead of failing the whole run."""
-    if name in resolved:
-        return resolved[name].entity_id
-    print(f"  [warning] '{name}' wasn't in the extracted entities list; resolving on the fly as {fallback_entity_type}")
-    result = resolve_entity(conn, name, fallback_entity_type)
-    resolved[name] = result
-    return result.entity_id
-
-
-def get_existing_meeting(conn, meeting_id: str) -> tuple[date, str]:
-    with conn.cursor() as cur:
-        cur.execute("select meeting_date, primary_contact_id from meetings where id = %s", (meeting_id,))
-        row = cur.fetchone()
-        if row is None:
-            raise SystemExit(f"No meeting found with id {meeting_id!r}")
-        return row[0], str(row[1]) if row[1] else None
-
-
-def get_existing_relation_keys(conn, meeting_id: str) -> set:
-    """Pre-seed dedup with what's already on this meeting, so a correction
-    that accidentally restates something already captured doesn't insert a
-    same-meeting duplicate (cross-meeting duplicates are fine - that's how
-    corroboration works)."""
-    with conn.cursor() as cur:
-        cur.execute("select source_id, relation_type, target_id from relations where meeting_id = %s", (meeting_id,))
-        return {(str(s), r, str(t)) for s, r, t in cur.fetchall()}
+def _print_resolution(entry) -> None:
+    note = f" -> matched existing '{entry.canonical_name}'" if entry.outcome != "created" else " -> new entity"
+    print(f"  [{entry.outcome}] {entry.name} ({entry.entity_type}){note}")
 
 
 def main() -> None:
@@ -138,105 +101,38 @@ def main() -> None:
         print(json.dumps(output, indent=2, ensure_ascii=False))
         return
 
-    # From here on, a failure means a real meeting could be lost - anything
-    # that goes wrong (extraction, resolution, or the DB writes themselves)
-    # must fail loudly and get a persisted retry record, never just an
-    # exception nobody sees.
-    conn = None
-    meeting_date = None
+    conn = get_connection()
     try:
-        conn = get_connection()
-
         if args.append_to_meeting:
-            meeting_id = args.append_to_meeting
-            meeting_date, primary_contact_id = get_existing_meeting(conn, meeting_id)
-            seen_relations = get_existing_relation_keys(conn, meeting_id)
-            print(f"Appending to existing meeting {meeting_id} (date {meeting_date})")
-
-            # The correction's own transcript needs to stay verifiable too -
-            # append it to raw_transcript so the minutes still let the user
-            # check extraction against what was actually said, for this
-            # voice note and not just the original.
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    update meetings
-                    set raw_transcript = raw_transcript || %s
-                    where id = %s
-                    """,
-                    (f"\n\n--- Correction (appended {date.today().isoformat()}) ---\n\n{transcript}", meeting_id),
-                )
+            print(f"Appending to existing meeting {args.append_to_meeting}")
+            print("Resolving entities...")
+            ingest_result = append_correction(
+                conn, args.append_to_meeting, transcript, audio_path=args.audio, on_resolved=_print_resolution
+            )
         else:
             if not args.meeting_date:
                 raise SystemExit("Pass --meeting-date (required for a new meeting)")
             if not args.primary_contact:
                 raise SystemExit("Pass --primary-contact (required for a new meeting; use --dry-run to skip)")
             meeting_date = datetime.strptime(args.meeting_date, "%Y-%m-%d").date()
-            seen_relations = set()
+            print("Resolving entities...")
+            ingest_result = ingest_new_meeting(
+                conn,
+                transcript,
+                meeting_date,
+                args.primary_contact,
+                location=args.location,
+                audio_path=args.audio,
+                on_resolved=_print_resolution,
+            )
 
-        result = extract(transcript)
-
-        print("Resolving entities...")
-        resolved = resolve_all_entities(conn, result.entities)
-
-        if not args.append_to_meeting:
-            primary_contact_id = resolve_name(conn, resolved, args.primary_contact, fallback_entity_type="person")
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    insert into meetings (meeting_date, primary_contact_id, location, raw_transcript, audio_url)
-                    values (%s, %s, %s, %s, %s)
-                    returning id
-                    """,
-                    (meeting_date, primary_contact_id, args.location, transcript, args.audio),
-                )
-                (meeting_id,) = cur.fetchone()
-
-        relation_count = 0
-        with conn.cursor() as cur:
-            for triple in result.relationships:
-                source_id = resolve_name(conn, resolved, triple.source)
-                target_id = resolve_name(conn, resolved, triple.target)
-                key = (source_id, triple.relation, target_id)
-                if key in seen_relations:
-                    continue
-                seen_relations.add(key)
-                cur.execute(
-                    """
-                    insert into relations (source_id, target_id, relation_type, meeting_id, provenance, recorded_at)
-                    values (%s, %s, %s, %s, %s, %s)
-                    """,
-                    (source_id, target_id, triple.relation, meeting_id, triple.provenance, meeting_date),
-                )
-                relation_count += 1
-
-        task_count = 0
-        with conn.cursor() as cur:
-            for task in result.tasks:
-                related_entity_id = resolve_name(conn, resolved, task.target_entity) if task.target_entity else None
-                due_date = resolve_due_date(meeting_date, task.relative_due)
-                cur.execute(
-                    """
-                    insert into tasks (description, related_entity_id, meeting_id, due_date)
-                    values (%s, %s, %s, %s)
-                    """,
-                    (task.description, related_entity_id, meeting_id, due_date),
-                )
-                task_count += 1
-
-        minutes = store_minutes(conn, meeting_id)
-
-        conn.commit()
-        print(f"\nCommitted: meeting {meeting_id}, {relation_count} relations, {task_count} tasks.")
-        print("\n" + minutes)
-    except Exception as exc:
-        if conn is not None:
-            conn.rollback()
-        record_failure(conn, meeting_date or date.today(), args.audio, transcript, exc)
-        raise
+        print(
+            f"\nCommitted: meeting {ingest_result.meeting_id}, "
+            f"{ingest_result.relation_count} relations, {ingest_result.task_count} tasks."
+        )
+        print("\n" + ingest_result.minutes)
     finally:
-        if conn is not None:
-            conn.close()
+        conn.close()
 
 
 if __name__ == "__main__":
