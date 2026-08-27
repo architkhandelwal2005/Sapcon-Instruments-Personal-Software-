@@ -26,6 +26,11 @@ direction:
 B" and "B end_user_of A" describing the same relationship) — pick the single relation type and \
 direction that best matches what was actually stated, and emit it once.
 
+   No entity has a fixed role. The same entity can be an OEM on one deal and a consultant or end \
+user on another — extract each relationship fact independently, from what is actually stated in \
+this transcript, and never infer or assume a role for an entity based on a role it played in a \
+different relation.
+
    For each triple, mark provenance. Provenance answers exactly one question - is the informant \
 speaking firsthand, or relaying a claim someone else made? It is a completely separate question \
 from whether the fact itself is certain, settled, or has already happened. NEVER use provenance to \
