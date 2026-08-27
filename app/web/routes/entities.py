@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from app.db import get_connection
+from app.entity_resolution.review_queue import fetch_flags_for_entity
 from app.graph.entity_view import fetch_entity_connections
 from app.minutes.generate import TaskRow, fetch_meeting_minutes_data
 from app.web.helpers import with_overdue_flags
@@ -65,6 +66,7 @@ def view_entity(request: Request, entity_id: str):
         history = _fetch_interaction_history(conn, entity_id)
         commitments = _fetch_open_commitments(conn, entity_id)
         connections = fetch_entity_connections(conn, entity_id)
+        review_flags = fetch_flags_for_entity(conn, entity_id)
         last_meeting = fetch_meeting_minutes_data(conn, history[0]["id"]) if history else None
     finally:
         conn.close()
@@ -77,6 +79,7 @@ def view_entity(request: Request, entity_id: str):
             "history": history,
             "commitments": commitments,
             "connections": connections,
+            "review_flags": review_flags,
             "last_meeting": last_meeting,
         },
     )

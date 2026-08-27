@@ -8,6 +8,21 @@
   {% if entity.aliases %}<div>Also known as: {{ entity.aliases | join(", ") }}</div>{% endif %}
 </div>
 
+{% if review_flags.as_new or review_flags.as_target %}
+  <div class="card review-flag">
+    <strong>Needs review - possible duplicate</strong>
+    {% for f in review_flags.as_new %}
+      <p>This entity couldn't be confidently matched and was created new - it might be the same as
+        <a class="entity-link" href="/entities/{{ f.other_entity_id }}">{{ f.other_entity_name }}</a>
+        (flagged {{ f.created_at.date() }}).</p>
+    {% endfor %}
+    {% for f in review_flags.as_target %}
+      <p><a class="entity-link" href="/entities/{{ f.other_entity_id }}">{{ f.other_entity_name }}</a>
+        was created separately but might be the same as this entity (flagged {{ f.created_at.date() }}).</p>
+    {% endfor %}
+  </div>
+{% endif %}
+
 <h2>Interaction history</h2>
 <div class="card">
   {% if history %}

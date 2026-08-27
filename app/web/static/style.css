@@ -183,6 +183,19 @@ form.correction-form button {
   font-style: italic;
 }
 
+.review-flag {
+  background: var(--hearsay-bg);
+  border: 1px solid var(--hearsay);
+}
+
+.review-flag strong {
+  color: var(--hearsay);
+}
+
+.review-flag p {
+  margin: 0.5rem 0 0;
+}
+
 .flash {
   background: #e8f3ee;
   border: 1px solid var(--accent);
