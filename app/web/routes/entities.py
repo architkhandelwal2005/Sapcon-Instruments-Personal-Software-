@@ -24,18 +24,27 @@ def _fetch_entity(conn, entity_id: str) -> dict:
 
 
 def _fetch_interaction_history(conn, entity_id: str) -> list[dict]:
-    """Meetings that mention this entity via any relation - works uniformly
-    for a person (who's usually also the primary_contact of their own
-    direct meetings) and a company (which only ever appears via relations,
-    never as primary_contact itself)."""
+    """Meetings that touch this entity via a relation OR a task - a task
+    with no relation is still a real meeting, and open commitments must
+    never be able to disagree with interaction history about whether one
+    exists (a "no meetings yet" next to a real open commitment would read
+    as if nothing is owed, on the one screen meant to prevent exactly
+    that). Works uniformly for a person (who's usually also the
+    primary_contact of their own direct meetings) and a company (which
+    only ever appears via relations/tasks, never as primary_contact
+    itself)."""
     with conn.cursor() as cur:
         cur.execute(
             """
             select distinct m.id, m.meeting_date, pc.canonical_name
             from meetings m
-            join relations r on r.meeting_id = m.id and r.status = 'active'
             left join entities pc on pc.id = m.primary_contact_id
-            where r.source_id = %(entity_id)s or r.target_id = %(entity_id)s
+            where m.id in (
+                select meeting_id from relations
+                where (source_id = %(entity_id)s or target_id = %(entity_id)s) and status = 'active'
+                union
+                select meeting_id from tasks where related_entity_id = %(entity_id)s
+            )
             order by m.meeting_date desc
             """,
             {"entity_id": entity_id},
