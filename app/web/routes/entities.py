@@ -92,3 +92,29 @@ def view_entity(request: Request, entity_id: str):
             "last_meeting": last_meeting,
         },
     )
+
+
+@router.get("/entities/{entity_id}/contour", response_class=HTMLResponse)
+def view_contour(request: Request, entity_id: str):
+    """Grouped list/table by relation type - not a visual graph, per
+    instruction. Reuses the same fetch_entity_connections() as the
+    profile's condensed view, just grouped rather than flat, so the two
+    screens can never disagree about what's connected."""
+    conn = get_connection()
+    try:
+        entity = _fetch_entity(conn, entity_id)
+        connections = fetch_entity_connections(conn, entity_id)
+    finally:
+        conn.close()
+
+    # Jinja's groupby filter requires pre-sorted input.
+    connections_sorted = sorted(connections, key=lambda c: (c.relation_type, c.other_name))
+
+    return templates.TemplateResponse(
+        request,
+        "contour.html",
+        {
+            "entity": entity,
+            "connections": connections_sorted,
+        },
+    )

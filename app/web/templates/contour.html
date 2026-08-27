@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ entity.canonical_name }} - Contour{% endblock %}
+{% block content %}
+
+<h1>{{ entity.canonical_name }}</h1>
+<div class="meta">
+  <div>{{ entity.entity_type }} &middot; <a class="entity-link" href="/entities/{{ entity.id }}">back to profile</a></div>
+</div>
+
+<h2>Connections, by relation type</h2>
+{% if connections %}
+  {% for relation_type, group in connections|groupby("relation_type") %}
+    <h3>{{ relation_type }}</h3>
+    <div class="card">
+      <ul class="relation-list">
+        {% for c in group %}
+          <li>
+            {% if c.direction == "out" %}
+              {{ entity.canonical_name }} <strong>{{ c.relation_type }}</strong>
+              <a class="entity-link" href="/entities/{{ c.other_id }}">{{ c.other_name }}</a>
+            {% else %}
+              <a class="entity-link" href="/entities/{{ c.other_id }}">{{ c.other_name }}</a>
+              <strong>{{ c.relation_type }}</strong> {{ entity.canonical_name }}
+            {% endif %}
+            <span class="badge badge-{{ c.provenance }}">{{ c.provenance }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endfor %}
+{% else %}
+  <p class="empty">No known connections yet.</p>
+{% endif %}
+
+{% endblock %}

@@ -81,6 +81,7 @@
 </div>
 
 <h2>Connections</h2>
+{% if connections %}<p class="meta"><a class="entity-link" href="/entities/{{ entity.id }}/contour">View full contour</a></p>{% endif %}
 <div class="card">
   {% if connections %}
     <ul class="relation-list">

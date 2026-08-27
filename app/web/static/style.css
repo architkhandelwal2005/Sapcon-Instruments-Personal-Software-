@@ -58,6 +58,14 @@ h2 {
   color: var(--accent);
 }
 
+h3 {
+  font-size: 0.95rem;
+  margin: 1rem 0 0.35rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 .meta {
   color: var(--muted);
   font-size: 0.95rem;
