@@ -4,7 +4,7 @@
 
 <h1>{{ entity.canonical_name }}</h1>
 <div class="meta">
-  <div>{{ entity.entity_type }}</div>
+  <div>{{ entity.entity_type }}{% if entity.region %} &middot; {{ entity.region }}{% endif %}</div>
   {% if entity.aliases %}<div>Also known as: {{ entity.aliases | join(", ") }}</div>{% endif %}
 </div>
 

@@ -29,7 +29,7 @@ def home(request: Request):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                select m.id, m.meeting_date, pc.canonical_name
+                select m.id, m.meeting_date, pc.canonical_name, pc.region
                 from meetings m
                 left join entities pc on pc.id = m.primary_contact_id
                 order by m.meeting_date desc
@@ -39,5 +39,5 @@ def home(request: Request):
     finally:
         conn.close()
 
-    meetings_list = [{"id": r[0], "meeting_date": r[1], "primary_contact_name": r[2]} for r in rows]
+    meetings_list = [{"id": r[0], "meeting_date": r[1], "primary_contact_name": r[2], "primary_contact_region": r[3]} for r in rows]
     return templates.TemplateResponse(request, "home.html", {"meetings": meetings_list})

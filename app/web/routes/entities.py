@@ -16,11 +16,11 @@ templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent
 
 def _fetch_entity(conn, entity_id: str) -> dict:
     with conn.cursor() as cur:
-        cur.execute("select canonical_name, entity_type, aliases from entities where id = %s", (entity_id,))
+        cur.execute("select canonical_name, entity_type, aliases, region from entities where id = %s", (entity_id,))
         row = cur.fetchone()
         if row is None:
             raise ValueError(f"No entity found with id {entity_id}")
-        return {"id": entity_id, "canonical_name": row[0], "entity_type": row[1], "aliases": row[2] or []}
+        return {"id": entity_id, "canonical_name": row[0], "entity_type": row[1], "aliases": row[2] or [], "region": row[3]}
 
 
 def _fetch_interaction_history(conn, entity_id: str) -> list[dict]:

@@ -8,7 +8,7 @@
     <ul class="relation-list">
       {% for m in meetings %}
         <li>
-          <a class="entity-link" href="/meetings/{{ m.id }}">{{ m.meeting_date }} - {{ m.primary_contact_name or "(no contact)" }}</a>
+          <a class="entity-link" href="/meetings/{{ m.id }}">{{ m.meeting_date }} - {{ m.primary_contact_name or "(no contact)" }}{% if m.primary_contact_region %} ({{ m.primary_contact_region }}){% endif %}</a>
         </li>
       {% endfor %}
     </ul>
