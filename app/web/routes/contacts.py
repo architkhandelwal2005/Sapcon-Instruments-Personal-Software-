@@ -2,11 +2,12 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app.db import get_connection
+from app.review import finalise_meeting_status
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
@@ -25,13 +26,14 @@ def _filter_options(conn) -> dict:
     return {"regions": regions, "sources": sources, "roles": roles}
 
 
-def _search(conn, *, q, etype, region, role, source, page) -> tuple[list[dict], int]:
+def _predicate(*, q, etype, region, role, source) -> tuple[str, dict]:
+    """The WHERE clause shared by the listing, the count, and bulk confirm -
+    so all three act on exactly the same set."""
     where = ["e.review_status <> 'rejected'"]
     params: dict = {}
     if q:
         where.append(
-            "(e.canonical_name ilike %(q)s or exists "
-            "(select 1 from unnest(e.aliases) a where a ilike %(q)s))"
+            "(e.canonical_name ilike %(q)s or exists (select 1 from unnest(e.aliases) a where a ilike %(q)s))"
         )
         params["q"] = f"%{q}%"
     if etype:
@@ -49,11 +51,15 @@ def _search(conn, *, q, etype, region, role, source, page) -> tuple[list[dict], 
             "and r.role_tag = %(role)s and r.review_status <> 'rejected')"
         )
         params["role"] = role
+    return " and ".join(where), params
 
-    clause = " and ".join(where)
+
+def _search(conn, clause, params, page) -> tuple[list[dict], int, int]:
     with conn.cursor() as cur:
         cur.execute(f"select count(*) from entities e where {clause}", params)
         total = cur.fetchone()[0]
+        cur.execute(f"select count(*) from entities e where {clause} and e.review_status = 'pending'", params)
+        pending = cur.fetchone()[0]
         cur.execute(
             f"""
             select e.id, e.canonical_name, e.entity_type, e.title, e.region, e.source, e.review_status
@@ -71,7 +77,7 @@ def _search(conn, *, q, etype, region, role, source, page) -> tuple[list[dict], 
             }
             for i, n, t, ti, rg, src, rs in cur.fetchall()
         ]
-    return rows, total
+    return rows, total, pending
 
 
 @router.get("/contacts", response_class=HTMLResponse)
@@ -83,16 +89,16 @@ def contacts_page(
     role: Optional[str] = None,
     source: Optional[str] = None,
     page: int = 0,
+    confirmed: Optional[int] = None,
 ):
     q = (q or "").strip()
     page = max(0, page)
+    clause, params = _predicate(q=q, etype=type, region=region, role=role, source=source)
 
     conn = get_connection()
     try:
         options = _filter_options(conn)
-        rows, total = _search(
-            conn, q=q, etype=type, region=region, role=role, source=source, page=page
-        )
+        rows, total, pending = _search(conn, clause, params, page)
     finally:
         conn.close()
 
@@ -105,6 +111,7 @@ def contacts_page(
         {
             "rows": rows,
             "total": total,
+            "pending": pending,
             "page": page,
             "showing_from": page * PAGE_SIZE + 1 if rows else 0,
             "showing_to": page * PAGE_SIZE + len(rows),
@@ -112,5 +119,54 @@ def contacts_page(
             "next_url": f"/contacts?{prefix}page={page + 1}" if (page + 1) * PAGE_SIZE < total else None,
             "options": options,
             "active": active,
+            "confirmed": confirmed,
         },
     )
+
+
+@router.post("/contacts/confirm")
+def bulk_confirm(
+    q: str = Form(default=""),
+    type: str = Form(default=""),
+    region: str = Form(default=""),
+    role: str = Form(default=""),
+    source: str = Form(default=""),
+):
+    """Confirm every pending contact matching the current filter, plus their
+    'employer' relations - how the office boy clears the seeded import once
+    they have eyeballed a slice of it."""
+    clause, params = _predicate(
+        q=q.strip(), etype=(type or None), region=(region or None), role=(role or None), source=(source or None)
+    )
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"update entities e set review_status = 'confirmed' where {clause} and e.review_status = 'pending' returning e.id",
+                params,
+            )
+            confirmed_ids = [r[0] for r in cur.fetchall()]
+            if confirmed_ids:
+                cur.execute(
+                    "update relations set review_status = 'confirmed' "
+                    "where review_status = 'pending' and (source_id = any(%s) or target_id = any(%s))",
+                    (confirmed_ids, confirmed_ids),
+                )
+                cur.execute(
+                    "select distinct meeting_id from relations where meeting_id is not null "
+                    "and (source_id = any(%s) or target_id = any(%s))",
+                    (confirmed_ids, confirmed_ids),
+                )
+                affected_meetings = [r[0] for r in cur.fetchall()]
+            else:
+                affected_meetings = []
+        for m in affected_meetings:
+            finalise_meeting_status(conn, m)
+        conn.commit()
+    finally:
+        conn.close()
+
+    active = {"q": q.strip(), "type": type, "region": region, "role": role, "source": source}
+    qs = urlencode({k: v for k, v in active.items() if v})
+    sep = "&" if qs else ""
+    return RedirectResponse(f"/contacts?{qs}{sep}confirmed={len(confirmed_ids)}", status_code=303)

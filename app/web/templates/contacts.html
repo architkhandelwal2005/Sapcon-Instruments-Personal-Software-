@@ -4,6 +4,10 @@
 
 <h1>Contacts</h1>
 
+{% if confirmed is not none %}
+  <div class="flash">{{ confirmed }} contact{{ "s" if confirmed != 1 else "" }} confirmed.</div>
+{% endif %}
+
 <form class="filter-form" method="get" action="/contacts">
   <input type="text" name="q" value="{{ active.q }}" placeholder="Search name or alias">
   <select name="type">
@@ -34,9 +38,15 @@
   <a class="entity-link" href="/contacts">Clear</a>
 </form>
 
-<p class="meta">
-  {% if total %}Showing {{ showing_from }}&ndash;{{ showing_to }} of {{ total }}{% else %}No contacts match.{% endif %}
-</p>
+<div class="meta contacts-summary">
+  <span>{% if total %}Showing {{ showing_from }}&ndash;{{ showing_to }} of {{ total }}{% else %}No contacts match.{% endif %}</span>
+  {% if pending %}
+    <form method="post" action="/contacts/confirm" onsubmit="return confirm('Confirm all {{ pending }} unconfirmed contacts in this filter?')">
+      {% for k, v in active.items() %}{% if v %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
+      <button type="submit">Confirm all {{ pending }} unconfirmed</button>
+    </form>
+  {% endif %}
+</div>
 
 {% if rows %}
   <div class="card">

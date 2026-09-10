@@ -3,12 +3,12 @@ from typing import Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app.db import get_connection
 from app.ingestion.pipeline import append_correction
-from app.minutes.generate import fetch_meeting_minutes_data
+from app.minutes.generate import fetch_meeting_minutes_data, generate_readback
 from app.web.helpers import save_and_transcribe, with_overdue_flags
 
 router = APIRouter()
@@ -49,6 +49,17 @@ def view_meeting(
             "flash_error": flash_error,
         },
     )
+
+
+@router.get("/meetings/{meeting_id}/readback", response_class=PlainTextResponse)
+def meeting_readback(meeting_id: str):
+    """The 'here's what I understood' plain-text recap - select-all, paste into
+    a message. Same formatter the CLI prints."""
+    conn = get_connection()
+    try:
+        return generate_readback(conn, meeting_id)
+    finally:
+        conn.close()
 
 
 @router.post("/meetings/{meeting_id}/correct")

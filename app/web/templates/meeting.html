@@ -82,6 +82,8 @@
   <pre>{{ data.raw_transcript or "(no transcript stored)" }}</pre>
 </details>
 
+<p class="meta"><a class="entity-link" href="/meetings/{{ data.meeting_id }}/readback" target="_blank">Plain-text read-back</a> &ndash; the 20-second "here's what I understood", ready to paste into a message.</p>
+
 <h2>Add a correction</h2>
 <p class="meta">Something missing or wrong above? Add a follow-up note (typed, or record a voice note) - it goes through the same extraction pipeline and appends to this meeting.</p>
 <form class="correction-form" method="post" action="/meetings/{{ data.meeting_id }}/correct" enctype="multipart/form-data">
