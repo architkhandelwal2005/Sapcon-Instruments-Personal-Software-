@@ -8,7 +8,13 @@
   </a>
 {% endif %}
 
-<h1>Meetings</h1>
+<form class="filter-form" method="get" action="/contacts">
+  <input type="text" name="q" placeholder="Search contacts by name">
+  <button type="submit">Search</button>
+</form>
+
+<h1>Recent meetings</h1>
+<p class="meta"><a class="entity-link" href="/meetings/new">+ New meeting</a></p>
 <div class="card">
   {% if meetings %}
     <ul class="relation-list">

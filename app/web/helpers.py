@@ -1,4 +1,19 @@
+import tempfile
 from datetime import date
+from pathlib import Path
+
+
+async def save_and_transcribe(audio) -> tuple[str, str]:
+    """Persist an UploadFile to a temp file and transcribe it with whisper.
+    Returns (transcript_text, temp_path); the caller keeps the path so it can
+    be stored as the meeting's audio reference."""
+    from app.transcription.whisper_client import transcribe
+
+    suffix = Path(audio.filename).suffix or ".wav"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(await audio.read())
+        path = tmp.name
+    return transcribe(path), path
 
 
 def with_overdue_flags(tasks) -> list[dict]:

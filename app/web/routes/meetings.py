@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from app.db import get_connection
 from app.ingestion.pipeline import append_correction
 from app.minutes.generate import fetch_meeting_minutes_data
-from app.web.helpers import with_overdue_flags
+from app.web.helpers import save_and_transcribe, with_overdue_flags
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
@@ -61,16 +61,7 @@ async def submit_correction(
     audio_path = None
 
     if audio is not None and audio.filename:
-        from pathlib import Path
-        import tempfile
-
-        from app.transcription.whisper_client import transcribe
-
-        suffix = Path(audio.filename).suffix or ".wav"
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp.write(await audio.read())
-            audio_path = tmp.name
-        transcribed = transcribe(audio_path)
+        transcribed, audio_path = await save_and_transcribe(audio)
         transcript = (transcript + "\n" + transcribed).strip() if transcript else transcribed
 
     if not transcript:

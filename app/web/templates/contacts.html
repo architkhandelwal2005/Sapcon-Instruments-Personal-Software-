@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Contacts - Sapcon CRM{% endblock %}
+{% block content %}
+
+<h1>Contacts</h1>
+
+<form class="filter-form" method="get" action="/contacts">
+  <input type="text" name="q" value="{{ active.q }}" placeholder="Search name or alias">
+  <select name="type">
+    <option value="">Any type</option>
+    {% for t in ["person", "company", "site"] %}
+      <option value="{{ t }}"{% if active.type == t %} selected{% endif %}>{{ t }}</option>
+    {% endfor %}
+  </select>
+  <select name="region">
+    <option value="">Any region</option>
+    {% for r in options.regions %}
+      <option value="{{ r }}"{% if active.region == r %} selected{% endif %}>{{ r }}</option>
+    {% endfor %}
+  </select>
+  <select name="role">
+    <option value="">Any role</option>
+    {% for r in options.roles %}
+      <option value="{{ r }}"{% if active.role == r %} selected{% endif %}>{{ r }}</option>
+    {% endfor %}
+  </select>
+  <select name="source">
+    <option value="">Any source</option>
+    {% for s in options.sources %}
+      <option value="{{ s }}"{% if active.source == s %} selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Filter</button>
+  <a class="entity-link" href="/contacts">Clear</a>
+</form>
+
+<p class="meta">
+  {% if total %}Showing {{ showing_from }}&ndash;{{ showing_to }} of {{ total }}{% else %}No contacts match.{% endif %}
+</p>
+
+{% if rows %}
+  <div class="card">
+    <table class="contact-table">
+      <thead>
+        <tr><th>Name</th><th>Type</th><th>Title</th><th>Region</th><th>Source</th></tr>
+      </thead>
+      <tbody>
+        {% for c in rows %}
+          <tr>
+            <td>
+              <a class="entity-link" href="/entities/{{ c.id }}">{{ c.canonical_name }}</a>
+              {% if c.review_status == "pending" %}<span class="badge badge-pending">unconfirmed</span>{% endif %}
+            </td>
+            <td>{{ c.entity_type }}</td>
+            <td>{{ c.title or "" }}</td>
+            <td>{{ c.region or "" }}</td>
+            <td>{{ c.source or "" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="pager">
+    {% if prev_url %}<a class="entity-link" href="{{ prev_url }}">&larr; Previous</a>{% endif %}
+    {% if next_url %}<a class="entity-link" href="{{ next_url }}">Next &rarr;</a>{% endif %}
+  </div>
+{% endif %}
+
+{% endblock %}

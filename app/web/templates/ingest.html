@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}New meeting - Sapcon CRM{% endblock %}
+{% block content %}
+
+<h1>New meeting</h1>
+
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+
+<p class="meta">Upload the voice note or type the recap. It goes through extraction and verification, then lands in the review queue for the office boy to clear.</p>
+
+<form class="ingest-form" method="post" action="/meetings/new" enctype="multipart/form-data">
+  <label>Meeting date
+    <input type="date" name="meeting_date" value="{{ today }}" required>
+  </label>
+  <label>Main person met <span class="meta">(optional)</span>
+    <input type="text" name="primary_contact" placeholder="e.g. Priya Nair">
+  </label>
+  <label>Location <span class="meta">(optional)</span>
+    <input type="text" name="location" placeholder="e.g. Pune">
+  </label>
+  <label>Recording <span class="meta">(optional if you type the recap)</span>
+    <input type="file" name="audio" accept="audio/*">
+  </label>
+  <label>Typed recap <span class="meta">(optional if you upload audio)</span>
+    <textarea name="text" placeholder="What happened in the meeting..."></textarea>
+  </label>
+  <button type="submit">Process meeting</button>
+</form>
+
+<p class="meta">Transcription of a long recording can take a minute.</p>
+
+{% endblock %}

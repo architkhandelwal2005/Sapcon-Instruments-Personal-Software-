@@ -317,6 +317,116 @@ ol.citation-list li:last-child {
   border-bottom: none;
 }
 
+form.filter-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+form.filter-form input[type="text"],
+form.filter-form select {
+  font-size: 0.95rem;
+  font-family: inherit;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+}
+
+form.filter-form input[type="text"] {
+  flex: 1 1 12rem;
+}
+
+form.filter-form button {
+  font-size: 0.95rem;
+  padding: 0.45rem 1rem;
+  border: none;
+  border-radius: 7px;
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+}
+
+table.contact-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+table.contact-table th {
+  text-align: left;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+table.contact-table td {
+  padding: 0.5rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+table.contact-table tr:last-child td {
+  border-bottom: none;
+}
+
+.pager {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.75rem;
+}
+
+.pager a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+form.ingest-form label {
+  display: block;
+  margin-bottom: 0.9rem;
+  font-weight: 600;
+}
+
+form.ingest-form label .meta {
+  font-weight: 400;
+}
+
+form.ingest-form input[type="text"],
+form.ingest-form input[type="date"],
+form.ingest-form input[type="file"],
+form.ingest-form textarea {
+  display: block;
+  width: 100%;
+  margin-top: 0.3rem;
+  font-size: 1rem;
+  font-family: inherit;
+  font-weight: 400;
+  padding: 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+form.ingest-form textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+form.ingest-form button {
+  font-size: 1rem;
+  padding: 0.6rem 1.4rem;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+}
+
 @media (max-width: 640px) {
   .review-layout {
     flex-direction: column;

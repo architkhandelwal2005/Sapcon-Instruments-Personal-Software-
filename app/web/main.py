@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.db import get_connection
 from app.review import pending_count
-from app.web.routes import ask, entities, meetings, review
+from app.web.routes import ask, contacts, entities, ingest, meetings, review
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -19,10 +19,13 @@ app = FastAPI(title="Sapcon CRM")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
+# ingest before meetings: /meetings/new must not be caught by /meetings/{meeting_id}
+app.include_router(ingest.router)
 app.include_router(meetings.router)
 app.include_router(entities.router)
 app.include_router(review.router)
 app.include_router(ask.router)
+app.include_router(contacts.router)
 
 
 @app.get("/", response_class=HTMLResponse)
