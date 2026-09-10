@@ -2,6 +2,12 @@
 {% block title %}Sapcon CRM{% endblock %}
 {% block content %}
 
+{% if review_backlog %}
+  <a class="review-callout" href="/review">
+    <strong>{{ review_backlog }}</strong> meeting{{ "s" if review_backlog != 1 else "" }} waiting for review
+  </a>
+{% endif %}
+
 <h1>Meetings</h1>
 <div class="card">
   {% if meetings %}
@@ -9,6 +15,7 @@
       {% for m in meetings %}
         <li>
           <a class="entity-link" href="/meetings/{{ m.id }}">{{ m.meeting_date }} - {{ m.primary_contact_name or "(no contact)" }}{% if m.primary_contact_region %} ({{ m.primary_contact_region }}){% endif %}</a>
+          {% if m.review_status == "pending" %}<span class="badge badge-pending">needs review</span>{% endif %}
         </li>
       {% endfor %}
     </ul>

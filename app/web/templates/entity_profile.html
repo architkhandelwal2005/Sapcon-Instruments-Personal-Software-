@@ -4,9 +4,15 @@
 
 <h1>{{ entity.canonical_name }}</h1>
 <div class="meta">
-  <div>{{ entity.entity_type }}{% if entity.region %} &middot; {{ entity.region }}{% endif %}</div>
+  <div>{{ entity.entity_type }}{% if entity.title %} &middot; {{ entity.title }}{% endif %}{% if entity.region %} &middot; {{ entity.region }}{% endif %}</div>
+  {% if entity.phone or entity.email %}<div>{{ entity.phone or "" }}{% if entity.phone and entity.email %} &middot; {% endif %}{{ entity.email or "" }}</div>{% endif %}
   {% if entity.aliases %}<div>Also known as: {{ entity.aliases | join(", ") }}</div>{% endif %}
+  {% if entity.review_status == "pending" %}<div><span class="badge badge-pending">unconfirmed - in review queue</span></div>{% endif %}
 </div>
+
+{% if entity.notes %}
+  <div class="card"><strong>Notes</strong><pre class="notes">{{ entity.notes }}</pre></div>
+{% endif %}
 
 {% if review_flags.as_new or review_flags.as_target %}
   <div class="card review-flag">
@@ -44,14 +50,16 @@
 <div class="card">
   {% if last_meeting %}
     <div class="meta"><a class="entity-link" href="/meetings/{{ last_meeting.meeting_id }}">{{ last_meeting.meeting_date }} &middot; view full minutes</a></div>
-    {% if last_meeting.direct_relations %}
+    {% if last_meeting.summary %}
+      <p>{{ last_meeting.summary }}</p>
+    {% elif last_meeting.connections %}
       <ul class="relation-list">
-        {% for r in last_meeting.direct_relations %}
-          <li>{{ r.source }} <strong>{{ r.relation_type }}</strong> {{ r.target }}</li>
+        {% for r in last_meeting.connections %}
+          <li>{{ r.description }}</li>
         {% endfor %}
       </ul>
     {% else %}
-      <p class="empty">No relationships recorded in that meeting.</p>
+      <p class="empty">Nothing recorded in that meeting.</p>
     {% endif %}
   {% else %}
     <p class="empty">No meetings yet.</p>
@@ -87,14 +95,16 @@
     <ul class="relation-list">
       {% for c in connections %}
         <li>
-          {% if c.direction == "out" %}
-            {{ entity.canonical_name }} <strong>{{ c.relation_type }}</strong>
-            <a class="entity-link" href="/entities/{{ c.other_id }}">{{ c.other_name }}</a>
-          {% else %}
-            <a class="entity-link" href="/entities/{{ c.other_id }}">{{ c.other_name }}</a>
-            <strong>{{ c.relation_type }}</strong> {{ entity.canonical_name }}
-          {% endif %}
-          <span class="badge badge-{{ c.provenance }}">{{ c.provenance }}</span>
+          <div>
+            {{ c.description }}
+            {% if c.role_tag %}<span class="badge badge-tag">{{ c.role_tag }}</span>{% endif %}
+            <span class="badge badge-{{ c.provenance }}">{{ c.provenance }}</span>
+            {% if c.review_status not in ("auto_confirmed", "confirmed") %}<span class="badge badge-pending">unconfirmed</span>{% endif %}
+          </div>
+          <div class="meta">
+            {% if c.direction == "out" %}{{ entity.canonical_name }} &rarr; <a class="entity-link" href="/entities/{{ c.other_id }}">{{ c.other_name }}</a>
+            {% else %}<a class="entity-link" href="/entities/{{ c.other_id }}">{{ c.other_name }}</a> &rarr; {{ entity.canonical_name }}{% endif %}
+          </div>
         </li>
       {% endfor %}
     </ul>

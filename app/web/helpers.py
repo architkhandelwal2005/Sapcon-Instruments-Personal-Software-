@@ -13,6 +13,10 @@ def with_overdue_flags(tasks) -> list[dict]:
                 "due_date": t.due_date,
                 "status": t.status,
                 "overdue": bool(t.due_date and t.due_date < today and t.status != "done"),
+                "review_status": getattr(t, "review_status", ""),
+                "confidence": getattr(t, "confidence", None),
+                "source_quote": getattr(t, "source_quote", None),
+                "task_id": getattr(t, "task_id", ""),
             }
         )
     return out

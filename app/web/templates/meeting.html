@@ -13,24 +13,34 @@
   <div>{{ data.meeting_date }}{% if data.location %} &middot; {{ data.location }}{% endif %}</div>
 </div>
 
-<h2>Relationships</h2>
+{% if data.review_status == "pending" %}
+  <a class="review-callout" href="/review/{{ data.meeting_id }}">This meeting has items waiting for review</a>
+{% endif %}
+
+{% if data.summary %}
+  <h2>Summary</h2>
+  <div class="card"><p>{{ data.summary }}</p></div>
+{% endif %}
+
+<h2>Connections</h2>
 <div class="card">
-  {% if data.direct_relations or data.hearsay_relations %}
+  {% if data.connections %}
     <ul class="relation-list">
-      {% for r in data.direct_relations %}
+      {% for c in data.connections %}
         <li>
-          <a class="entity-link" href="/entities/{{ r.source_id }}">{{ r.source }}</a>
-          <strong>{{ r.relation_type }}</strong>
-          <a class="entity-link" href="/entities/{{ r.target_id }}">{{ r.target }}</a>
-          <span class="badge badge-direct">direct</span>
-        </li>
-      {% endfor %}
-      {% for r in data.hearsay_relations %}
-        <li>
-          <a class="entity-link" href="/entities/{{ r.source_id }}">{{ r.source }}</a>
-          <strong>{{ r.relation_type }}</strong>
-          <a class="entity-link" href="/entities/{{ r.target_id }}">{{ r.target }}</a>
-          <span class="badge badge-hearsay">hearsay</span>
+          <div>
+            {{ c.description }}
+            {% if c.role_tag %}<span class="badge badge-tag">{{ c.role_tag }}</span>{% endif %}
+            <span class="badge badge-{{ c.provenance }}">{{ c.provenance }}</span>
+            {% if c.review_status != "auto_confirmed" and c.review_status != "confirmed" %}
+              <span class="badge badge-pending">{{ c.review_status }} &middot; {{ c.confidence }}</span>
+            {% endif %}
+          </div>
+          <div class="meta">
+            <a class="entity-link" href="/entities/{{ c.source_id }}">{{ c.source }}</a> &rarr;
+            <a class="entity-link" href="/entities/{{ c.target_id }}">{{ c.target }}</a>
+          </div>
+          {% if c.source_quote %}<div class="quote">&ldquo;{{ c.source_quote }}&rdquo;</div>{% endif %}
         </li>
       {% endfor %}
     </ul>
@@ -46,6 +56,9 @@
       {% for t in tasks %}
         <li class="task-item">
           {{ t.description }}
+          {% if t.review_status and t.review_status != "auto_confirmed" and t.review_status != "confirmed" %}
+            <span class="badge badge-pending">{{ t.review_status }} &middot; {{ t.confidence }}</span>
+          {% endif %}
           {% if t.related_entity_name %}
             <div class="task-ref">re: <a class="entity-link" href="/entities/{{ t.related_entity_id }}">{{ t.related_entity_name }}</a></div>
           {% endif %}

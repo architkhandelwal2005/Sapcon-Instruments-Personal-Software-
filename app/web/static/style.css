@@ -41,10 +41,19 @@ header.site-header a {
   font-weight: 600;
 }
 
+header.site-header a + a {
+  margin-left: 1rem;
+  font-weight: 500;
+}
+
 main {
   max-width: 720px;
   margin: 0 auto;
   padding: 1rem 1rem 3rem;
+}
+
+main.wide {
+  max-width: 1100px;
 }
 
 h1 {
@@ -116,6 +125,163 @@ ul.relation-list li:last-child {
 .badge-direct {
   background: #e8f3ee;
   color: var(--accent);
+}
+
+.badge-pending {
+  background: var(--hearsay-bg);
+  color: var(--hearsay);
+}
+
+.badge-tag {
+  background: #eef1f5;
+  color: #445;
+}
+
+.review-callout {
+  display: block;
+  background: var(--hearsay-bg);
+  border: 1px solid var(--hearsay);
+  color: var(--hearsay);
+  border-radius: 8px;
+  padding: 0.7rem 1rem;
+  margin-bottom: 1rem;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.quote {
+  font-size: 0.9rem;
+  color: var(--muted);
+  border-left: 3px solid var(--border);
+  padding-left: 0.6rem;
+  margin: 0.4rem 0;
+}
+
+.quote.missing {
+  color: var(--overdue);
+  border-left-color: var(--overdue);
+}
+
+pre.notes {
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 0.9rem;
+  margin: 0.4rem 0 0;
+}
+
+.review-layout {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+  margin-top: 1rem;
+}
+
+.review-transcript {
+  flex: 1 1 40%;
+  position: sticky;
+  top: 1rem;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.review-transcript pre {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: inherit;
+  font-size: 0.9rem;
+  background: var(--card-bg);
+  padding: 0.9rem;
+  border-radius: 10px;
+}
+
+.review-items {
+  flex: 1 1 60%;
+}
+
+.review-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.8rem;
+  margin-bottom: 0.7rem;
+}
+
+.review-item.settled {
+  opacity: 0.6;
+}
+
+.struck {
+  text-decoration: line-through;
+}
+
+.review-actions {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.review-actions button {
+  font-size: 0.9rem;
+  padding: 0.35rem 0.9rem;
+  border: none;
+  border-radius: 7px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-confirm {
+  background: var(--accent);
+  color: white;
+}
+
+.btn-reject {
+  background: var(--overdue-bg);
+  color: var(--overdue);
+}
+
+.review-edit {
+  flex-basis: 100%;
+}
+
+.review-edit summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.review-edit textarea {
+  width: 100%;
+  min-height: 60px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-top: 0.4rem;
+}
+
+.review-edit input[type="text"],
+.review-edit input[type="date"] {
+  display: block;
+  margin-top: 0.4rem;
+  padding: 0.4rem;
+  font-family: inherit;
+  font-size: 0.95rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+@media (max-width: 640px) {
+  .review-layout {
+    flex-direction: column;
+  }
+  .review-transcript {
+    position: static;
+    max-height: 40vh;
+    width: 100%;
+  }
 }
 
 .task-item {

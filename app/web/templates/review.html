@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Review queue - Sapcon CRM{% endblock %}
+{% block content %}
+
+<h1>Review queue</h1>
+
+{% if meetings %}
+  <p class="meta">Each meeting below has items the extraction could not confidently confirm. Open one to check it against the transcript.</p>
+  <div class="card">
+    <ul class="relation-list">
+      {% for m in meetings %}
+        <li>
+          <a class="entity-link" href="/review/{{ m.meeting_id }}">
+            {{ m.meeting_date }} - {{ m.primary_contact_name or "(no contact)" }}
+          </a>
+          <span class="badge badge-pending">{{ m.pending_total }} to check</span>
+          <div class="meta">
+            {% if m.pending_entities %}{{ m.pending_entities }} people/companies &middot; {% endif %}
+            {% if m.pending_relations %}{{ m.pending_relations }} connections &middot; {% endif %}
+            {% if m.pending_tasks %}{{ m.pending_tasks }} tasks{% endif %}
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+{% else %}
+  <p class="empty">Nothing waiting. Every meeting is cleared.</p>
+{% endif %}
+
+{% endblock %}

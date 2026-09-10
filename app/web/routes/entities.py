@@ -16,11 +16,19 @@ templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent
 
 def _fetch_entity(conn, entity_id: str) -> dict:
     with conn.cursor() as cur:
-        cur.execute("select canonical_name, entity_type, aliases, region from entities where id = %s", (entity_id,))
+        cur.execute(
+            "select canonical_name, entity_type, aliases, region, title, phone, email, "
+            "review_status, notes from entities where id = %s",
+            (entity_id,),
+        )
         row = cur.fetchone()
         if row is None:
             raise ValueError(f"No entity found with id {entity_id}")
-        return {"id": entity_id, "canonical_name": row[0], "entity_type": row[1], "aliases": row[2] or [], "region": row[3]}
+        return {
+            "id": entity_id, "canonical_name": row[0], "entity_type": row[1], "aliases": row[2] or [],
+            "region": row[3], "title": row[4], "phone": row[5], "email": row[6],
+            "review_status": row[7], "notes": row[8],
+        }
 
 
 def _fetch_interaction_history(conn, entity_id: str) -> list[dict]:
@@ -41,9 +49,10 @@ def _fetch_interaction_history(conn, entity_id: str) -> list[dict]:
             left join entities pc on pc.id = m.primary_contact_id
             where m.id in (
                 select meeting_id from relations
-                where (source_id = %(entity_id)s or target_id = %(entity_id)s) and status = 'active'
+                where (source_id = %(entity_id)s or target_id = %(entity_id)s)
+                  and status = 'active' and review_status <> 'rejected'
                 union
-                select meeting_id from tasks where related_entity_id = %(entity_id)s
+                select meeting_id from tasks where related_entity_id = %(entity_id)s and review_status <> 'rejected'
             )
             order by m.meeting_date desc
             """,
@@ -58,12 +67,18 @@ def _fetch_open_commitments(conn, entity_id: str) -> list[dict]:
             """
             select description, due_date, status
             from tasks
-            where related_entity_id = %(entity_id)s and status = 'open'
+            where related_entity_id = %(entity_id)s and status = 'open' and review_status <> 'rejected'
             order by due_date nulls last
             """,
             {"entity_id": entity_id},
         )
-        rows = [TaskRow(description, None, entity_id, due_date, status) for description, due_date, status in cur.fetchall()]
+        rows = [
+            TaskRow(
+                description=description, related_entity_name=None, related_entity_id=entity_id,
+                due_date=due_date, status=status, confidence=None, review_status="", source_quote=None, task_id="",
+            )
+            for description, due_date, status in cur.fetchall()
+        ]
         return with_overdue_flags(rows)
 
 
@@ -107,8 +122,9 @@ def view_contour(request: Request, entity_id: str):
     finally:
         conn.close()
 
-    # Jinja's groupby filter requires pre-sorted input.
-    connections_sorted = sorted(connections, key=lambda c: (c.relation_type, c.other_name))
+    # Jinja's groupby filter requires pre-sorted input. Untagged edges group
+    # under "" and render as "untagged".
+    connections_sorted = sorted(connections, key=lambda c: (c.role_tag or "", c.other_name))
 
     return templates.TemplateResponse(
         request,

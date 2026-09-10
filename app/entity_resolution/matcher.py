@@ -31,7 +31,7 @@ def find_candidates(conn: psycopg.Connection, name: str, entity_type: str, limit
                        coalesce((select max(similarity(alias, %(name)s)) from unnest(aliases) as alias), 0)
                    ) as score
             from entities
-            where entity_type = %(entity_type)s
+            where entity_type = %(entity_type)s and review_status <> 'rejected'
             order by score desc
             limit %(limit)s
             """,

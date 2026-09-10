@@ -78,18 +78,13 @@ async def submit_correction(
 
     ambiguous: list[str] = []
 
-    def _on_resolved(entry) -> None:
-        if entry.outcome == "ambiguous_created":
-            ambiguous.append(f"{entry.name} (possible duplicate of {entry.possible_duplicate_of})")
+    def _on_resolved(mentioned: str, r) -> None:
+        if r.outcome == "uncertain_created":
+            ambiguous.append(f"{mentioned} (possible duplicate of {r.possible_duplicate_of})")
 
     conn = get_connection()
     try:
-        # interactive=False: this is a web request, not a terminal - the
-        # confirm-queue reads from stdin and would hang forever here. See
-        # resolve_entity()'s docstring.
-        append_correction(
-            conn, meeting_id, transcript, audio_path=audio_path, interactive=False, on_resolved=_on_resolved
-        )
+        append_correction(conn, meeting_id, transcript, audio_path=audio_path, on_resolved=_on_resolved)
     except Exception as exc:
         return RedirectResponse(f"/meetings/{meeting_id}?error={quote(str(exc)[:200])}", status_code=303)
     finally:

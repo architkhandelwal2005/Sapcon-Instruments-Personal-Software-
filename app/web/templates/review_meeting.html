@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Review {{ data.meeting_date }} - Sapcon CRM{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+
+<h1>Review - {{ data.primary_contact_name or "meeting" }}</h1>
+<div class="meta"><div>{{ data.meeting_date }}{% if data.location %} &middot; {{ data.location }}{% endif %}</div></div>
+
+{% if done and data.review_status == "clear" %}
+  <div class="flash">All items checked - this meeting is cleared. <a class="entity-link" href="/review">Back to the queue</a></div>
+{% elif done %}
+  <div class="flash">Saved.</div>
+{% endif %}
+
+<a class="entity-link" href="/meetings/{{ data.meeting_id }}">&larr; full meeting view</a>
+
+<div class="review-layout">
+
+  <div class="review-transcript">
+    <h2>Transcript</h2>
+    {% if data.summary %}<p class="meta">{{ data.summary }}</p>{% endif %}
+    <pre>{{ data.raw_transcript or "(no transcript stored)" }}</pre>
+  </div>
+
+  <div class="review-items">
+
+    {% set pending_entities = entities | selectattr("review_status", "equalto", "pending") | list %}
+    {% if pending_entities %}
+      <h2>People &amp; companies</h2>
+      {% for e in pending_entities %}
+        <div class="review-item">
+          <div>
+            <a class="entity-link" href="/entities/{{ e.entity_id }}">{{ e.canonical_name }}</a>
+            <span class="badge badge-tag">{{ e.entity_type }}</span>
+            <span class="badge badge-pending">{{ e.confidence or "unconfirmed" }}</span>
+          </div>
+          {% if e.possible_duplicate_of %}
+            <div class="meta">Might be the same as <strong>{{ e.possible_duplicate_of }}</strong>. Confirm only if it is genuinely a different {{ e.entity_type }}.</div>
+          {% endif %}
+          <form class="review-actions" method="post" action="/review/{{ data.meeting_id }}/item">
+            <input type="hidden" name="kind" value="entity">
+            <input type="hidden" name="item_id" value="{{ e.entity_id }}">
+            <button name="decision" value="confirm" class="btn-confirm">Confirm</button>
+            <button name="decision" value="reject" class="btn-reject">Reject</button>
+          </form>
+        </div>
+      {% endfor %}
+    {% endif %}
+
+    <h2>Connections</h2>
+    {% if data.connections %}
+      {% for c in data.connections %}
+        {% set settled = c.review_status in ("confirmed",) %}
+        <div class="review-item{% if settled %} settled{% endif %}">
+          <div>
+            {{ c.description }}
+            {% if c.role_tag %}<span class="badge badge-tag">{{ c.role_tag }}</span>{% endif %}
+            <span class="badge badge-{{ c.provenance }}">{{ c.provenance }}</span>
+            <span class="badge {% if c.review_status in ('confirmed','auto_confirmed') %}badge-direct{% else %}badge-pending{% endif %}">{{ c.review_status }}{% if c.confidence %} &middot; {{ c.confidence }}{% endif %}</span>
+          </div>
+          <div class="meta">{{ c.source }} &rarr; {{ c.target }}</div>
+          {% if c.source_quote %}
+            <div class="quote">&ldquo;{{ c.source_quote }}&rdquo;</div>
+          {% else %}
+            <div class="quote missing">No supporting sentence found in the transcript - check carefully.</div>
+          {% endif %}
+          <form class="review-actions" method="post" action="/review/{{ data.meeting_id }}/item">
+            <input type="hidden" name="kind" value="relation">
+            <input type="hidden" name="item_id" value="{{ c.relation_id }}">
+            {% if not settled %}<button name="decision" value="confirm" class="btn-confirm">Confirm</button>{% endif %}
+            <button name="decision" value="reject" class="btn-reject">Reject</button>
+            <details class="review-edit">
+              <summary>Edit</summary>
+              <textarea name="description">{{ c.description }}</textarea>
+              <input type="text" name="role_tag" value="{{ c.role_tag or '' }}" placeholder="role tag (optional)">
+              <button name="decision" value="confirm" class="btn-confirm">Save &amp; confirm</button>
+            </details>
+          </form>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p class="empty">No connections.</p>
+    {% endif %}
+
+    <h2>Tasks</h2>
+    {% if data.tasks %}
+      {% for t in data.tasks %}
+        {% set settled = t.review_status in ("confirmed",) %}
+        <div class="review-item{% if settled %} settled{% endif %}">
+          <div>
+            {{ t.description }}
+            <span class="badge {% if t.review_status in ('confirmed','auto_confirmed') %}badge-direct{% else %}badge-pending{% endif %}">{{ t.review_status }}{% if t.confidence %} &middot; {{ t.confidence }}{% endif %}</span>
+          </div>
+          <div class="meta">
+            {% if t.due_date %}due {{ t.due_date }}{% else %}no due date{% endif %}
+            {% if t.related_entity_name %} &middot; re: {{ t.related_entity_name }}{% endif %}
+          </div>
+          {% if t.source_quote %}<div class="quote">&ldquo;{{ t.source_quote }}&rdquo;</div>{% endif %}
+          <form class="review-actions" method="post" action="/review/{{ data.meeting_id }}/item">
+            <input type="hidden" name="kind" value="task">
+            <input type="hidden" name="item_id" value="{{ t.task_id }}">
+            {% if not settled %}<button name="decision" value="confirm" class="btn-confirm">Confirm</button>{% endif %}
+            <button name="decision" value="reject" class="btn-reject">Reject</button>
+            <details class="review-edit">
+              <summary>Edit</summary>
+              <textarea name="description">{{ t.description }}</textarea>
+              <input type="date" name="due_date" value="{{ t.due_date or '' }}">
+              <button name="decision" value="confirm" class="btn-confirm">Save &amp; confirm</button>
+            </details>
+          </form>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p class="empty">No tasks.</p>
+    {% endif %}
+
+    {% if rejected.relations or rejected.tasks %}
+      <h2>Rejected</h2>
+      <p class="meta">Kept in case a reject was a mistake. Restore puts the item back as confirmed.</p>
+      {% for r in rejected.relations %}
+        <div class="review-item settled">
+          <div class="struck">{{ r.description }} <span class="meta">({{ r.source }} &rarr; {{ r.target }})</span></div>
+          <form class="review-actions" method="post" action="/review/{{ data.meeting_id }}/item">
+            <input type="hidden" name="kind" value="relation">
+            <input type="hidden" name="item_id" value="{{ r.id }}">
+            <button name="decision" value="confirm" class="btn-confirm">Restore</button>
+          </form>
+        </div>
+      {% endfor %}
+      {% for t in rejected.tasks %}
+        <div class="review-item settled">
+          <div class="struck">{{ t.description }}</div>
+          <form class="review-actions" method="post" action="/review/{{ data.meeting_id }}/item">
+            <input type="hidden" name="kind" value="task">
+            <input type="hidden" name="item_id" value="{{ t.id }}">
+            <button name="decision" value="confirm" class="btn-confirm">Restore</button>
+          </form>
+        </div>
+      {% endfor %}
+    {% endif %}
+
+  </div>
+</div>
+
+{% endblock %}

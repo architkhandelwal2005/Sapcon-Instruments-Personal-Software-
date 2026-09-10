@@ -17,6 +17,7 @@ from app.entity_resolution.resolve import ResolutionResult, resolve_entity
 from app.extraction.extractor import extract
 from app.extraction.resolve_dates import resolve_due_date
 from app.ingestion.failures import record_failure
+from app.review import finalise_meeting_status
 
 
 @dataclass
@@ -103,23 +104,6 @@ def _write_meeting_body(conn, result, resolved, on_resolved, meeting_id, meeting
     return conn_count, task_count, auto, pending
 
 
-def _finalise_meeting_status(conn, meeting_id) -> None:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            update meetings set review_status = case when exists (
-                select 1 from relations where meeting_id = %(m)s and review_status = 'pending'
-                union all select 1 from tasks where meeting_id = %(m)s and review_status = 'pending'
-                union all select 1 from entities e
-                    join relations r on r.meeting_id = %(m)s and (r.source_id = e.id or r.target_id = e.id)
-                    where e.review_status = 'pending'
-            ) then 'pending' else 'clear' end
-            where id = %(m)s
-            """,
-            {"m": meeting_id},
-        )
-
-
 def ingest_new_meeting(
     conn: psycopg.Connection,
     transcript: str,
@@ -148,7 +132,7 @@ def ingest_new_meeting(
         cc, tc, auto, pending = _write_meeting_body(
             conn, result, resolved, on_resolved, meeting_id, meeting_date, transcript
         )
-        _finalise_meeting_status(conn, meeting_id)
+        finalise_meeting_status(conn, meeting_id)
         conn.commit()
         return IngestResult(str(meeting_id), len(resolved), cc, tc, auto, pending, list(resolved.values()))
     except Exception as exc:
@@ -182,7 +166,7 @@ def append_correction(
         cc, tc, auto, pending = _write_meeting_body(
             conn, result, resolved, on_resolved, meeting_id, meeting_date, transcript
         )
-        _finalise_meeting_status(conn, meeting_id)
+        finalise_meeting_status(conn, meeting_id)
         conn.commit()
         return IngestResult(str(meeting_id), len(resolved), cc, tc, auto, pending, list(resolved.values()))
     except Exception as exc:
