@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.db import get_connection
 from app.review import pending_count
-from app.web.routes import entities, meetings, review
+from app.web.routes import ask, entities, meetings, review
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -22,6 +22,7 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.include_router(meetings.router)
 app.include_router(entities.router)
 app.include_router(review.router)
+app.include_router(ask.router)
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -3,6 +3,7 @@
 {% block content %}
 
 <h1>{{ entity.canonical_name }}</h1>
+<p><a class="entity-link" href="/ask?entity={{ entity.id }}">Brief me on {{ entity.canonical_name }} &rarr;</a></p>
 <div class="meta">
   <div>{{ entity.entity_type }}{% if entity.title %} &middot; {{ entity.title }}{% endif %}{% if entity.region %} &middot; {{ entity.region }}{% endif %}</div>
   {% if entity.phone or entity.email %}<div>{{ entity.phone or "" }}{% if entity.phone and entity.email %} &middot; {% endif %}{{ entity.email or "" }}</div>{% endif %}

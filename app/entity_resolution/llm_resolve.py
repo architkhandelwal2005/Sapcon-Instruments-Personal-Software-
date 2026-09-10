@@ -5,14 +5,11 @@ that's an unrecoverable mistake, so doubt always creates a new entity that's
 flagged for a human instead.
 """
 
-import json
-import os
 from dataclasses import dataclass
 from typing import Literal, Optional
 
 from app.entity_resolution.matcher import Candidate
-
-PROVIDER = os.environ.get("EXTRACTION_PROVIDER", "gemini").lower()
+from app.llm import complete_json
 
 PROMPT = """You decide whether a name mentioned in a sales meeting note refers to an entity that \
 already exists in the CRM, or is someone/something new. You get: the mentioned name and its type, \
@@ -33,32 +30,6 @@ class MatchDecision:
     confidence: Literal["high", "medium", "low"]
 
 
-def _call(payload: str) -> dict:
-    if PROVIDER == "anthropic":
-        import anthropic
-
-        client = anthropic.Anthropic()
-        resp = client.messages.create(
-            model=os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
-            max_tokens=512,
-            temperature=0,
-            system=PROMPT,
-            messages=[{"role": "user", "content": payload}],
-        )
-        text = "".join(b.text for b in resp.content if b.type == "text")
-        return json.loads(text[text.index("{") : text.rindex("}") + 1])
-
-    from google import genai
-
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    resp = client.models.generate_content(
-        model=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite"),
-        contents=payload,
-        config={"system_instruction": PROMPT, "response_mime_type": "application/json", "temperature": 0},
-    )
-    return json.loads(resp.text)
-
-
 def decide_match(name: str, entity_type: str, context: str, candidates: list[Candidate]) -> MatchDecision:
     if not candidates:
         return MatchDecision("new", None, "no similar existing entity", "high")
@@ -75,7 +46,7 @@ def decide_match(name: str, entity_type: str, context: str, candidates: list[Can
         f"CONTEXT FROM THE NOTE:\n{context}\n\n"
         f"EXISTING CANDIDATES:\n{cand_lines}"
     )
-    raw = _call(payload)
+    raw = complete_json(PROMPT, payload, max_tokens=512)
     decision = raw.get("decision", "uncertain")
     match_id = raw.get("match_id")
     if decision == "match" and match_id not in {c.id for c in candidates}:

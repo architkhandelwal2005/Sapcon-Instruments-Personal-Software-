@@ -9,19 +9,11 @@ adversarial prompt, so it's an independent check even when the model is the
 same. Cross-model verification is a later hardening knob.
 """
 
-import json
-import os
-import re
 from dataclasses import dataclass
 from typing import Optional
 
 from app.extraction.schema import ExtractionResult
-
-
-def _norm(s: str) -> str:
-    return re.sub(r"\s+", " ", s or "").strip()
-
-PROVIDER = os.environ.get("EXTRACTION_PROVIDER", "gemini").lower()
+from app.llm import complete_json, is_grounded, normalize_ws
 
 VERIFY_PROMPT = """You are checking a structured extraction against the meeting transcript it \
 came from. You will get the transcript and a numbered list of claims. For each claim, find the \
@@ -56,32 +48,8 @@ def _build_claims(result: ExtractionResult) -> list[tuple[str, str]]:
 def _call(transcript: str, claims: list[str]) -> list[ClaimCheck]:
     numbered = "\n".join(f"{i}. {c}" for i, c in enumerate(claims))
     user = f"TRANSCRIPT:\n{transcript}\n\nCLAIMS:\n{numbered}"
+    raw = complete_json(VERIFY_PROMPT, user, max_tokens=4096)
 
-    if PROVIDER == "anthropic":
-        import anthropic
-
-        client = anthropic.Anthropic()
-        resp = client.messages.create(
-            model=os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
-            max_tokens=4096,
-            temperature=0,
-            system=VERIFY_PROMPT,
-            messages=[{"role": "user", "content": user}],
-        )
-        text = "".join(b.text for b in resp.content if b.type == "text")
-        raw = json.loads(text[text.index("[") : text.rindex("]") + 1])
-    else:
-        from google import genai
-
-        client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-        resp = client.models.generate_content(
-            model=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite"),
-            contents=user,
-            config={"system_instruction": VERIFY_PROMPT, "response_mime_type": "application/json", "temperature": 0},
-        )
-        raw = json.loads(resp.text)
-
-    norm_transcript = _norm(transcript)
     by_index = {item["index"]: item for item in raw}
     out = []
     for i in range(len(claims)):
@@ -89,8 +57,13 @@ def _call(transcript: str, claims: list[str]) -> list[ClaimCheck]:
         quote = item.get("quote") or None
         # Self-check: a "quote" the verifier paraphrased or invented is not
         # actually in the transcript. Only a real verbatim span counts.
-        grounded = bool(quote) and _norm(quote) in norm_transcript
-        out.append(ClaimCheck(quote=(_norm(quote) if grounded else None), supported=bool(item.get("supported")) and grounded))
+        grounded = bool(quote) and is_grounded(quote, transcript)
+        out.append(
+            ClaimCheck(
+                quote=(normalize_ws(quote) if grounded else None),
+                supported=bool(item.get("supported")) and grounded,
+            )
+        )
     return out
 
 

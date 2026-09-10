@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Ask - Sapcon CRM{% endblock %}
+{% block content %}
+
+<h1>{{ heading or "Ask" }}</h1>
+
+<form class="ask-form" method="get" action="/ask">
+  <textarea name="q" placeholder="e.g. brief me on Priya Nair &nbsp;|&nbsp; how are Thermo and Reliance Cement connected?">{{ q }}</textarea>
+  <button type="submit">Ask</button>
+</form>
+
+{% if understood %}<p class="meta">{{ understood }}</p>{% endif %}
+
+{% if answer %}
+  <div class="card answer">
+    {% for para in answer.text.split("\n") %}
+      {% if para.strip() %}<p>{{ para }}</p>{% endif %}
+    {% endfor %}
+  </div>
+
+  {% if answer.citations %}
+    <h2>Sources</h2>
+    {% if answer.ungrounded_citations %}
+      <p class="meta quote missing">{{ answer.ungrounded_citations }} of {{ answer.citations|length }} quotes could not be matched to a transcript - treat those points with care.</p>
+    {% endif %}
+    <div class="card">
+      <ol class="citation-list">
+        {% for c in answer.citations %}
+          <li>
+            <div class="quote{% if not c.grounded %} missing{% endif %}">&ldquo;{{ c.quote }}&rdquo;</div>
+            <div class="meta">
+              [{{ c.note_index }}]
+              <a class="entity-link" href="/meetings/{{ c.meeting_id }}">{{ c.meeting_date }}</a>
+              {% if not c.grounded %} &middot; <strong>not found verbatim</strong>{% endif %}
+            </div>
+          </li>
+        {% endfor %}
+      </ol>
+    </div>
+  {% endif %}
+
+  <p class="meta">Synthesised from {{ answer.notes_used }} meeting note{{ "s" if answer.notes_used != 1 else "" }}.</p>
+{% elif not heading %}
+  <p class="empty">Ask about a contact, or how two of them are connected.</p>
+{% endif %}
+
+{% endblock %}

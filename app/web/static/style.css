@@ -273,6 +273,50 @@ pre.notes {
   border-radius: 8px;
 }
 
+form.ask-form textarea {
+  width: 100%;
+  min-height: 70px;
+  font-size: 1rem;
+  font-family: inherit;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  resize: vertical;
+}
+
+form.ask-form button {
+  margin-top: 0.6rem;
+  font-size: 1rem;
+  padding: 0.55rem 1.4rem;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+}
+
+.card.answer p {
+  margin: 0 0 0.6rem;
+}
+
+.card.answer p:last-child {
+  margin-bottom: 0;
+}
+
+ol.citation-list {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+ol.citation-list li {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+ol.citation-list li:last-child {
+  border-bottom: none;
+}
+
 @media (max-width: 640px) {
   .review-layout {
     flex-direction: column;
