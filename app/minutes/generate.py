@@ -6,13 +6,18 @@ import psycopg
 
 
 @dataclass
-class RelationRow:
+class ConnectionRow:
     source: str
     source_id: str
-    relation_type: str
     target: str
     target_id: str
+    description: str
+    role_tag: Optional[str]
     provenance: str
+    confidence: Optional[str]
+    review_status: str
+    source_quote: Optional[str]
+    relation_id: str
 
 
 @dataclass
@@ -22,6 +27,10 @@ class TaskRow:
     related_entity_id: Optional[str]
     due_date: Optional[date]
     status: str
+    confidence: Optional[str]
+    review_status: str
+    source_quote: Optional[str]
+    task_id: str
 
 
 @dataclass
@@ -31,29 +40,22 @@ class MeetingMinutesData:
     location: Optional[str]
     audio_url: Optional[str]
     raw_transcript: Optional[str]
+    summary: Optional[str]
+    review_status: str
     primary_contact_name: Optional[str]
     primary_contact_id: Optional[str]
-    relations: list[RelationRow]
+    connections: list[ConnectionRow]
     tasks: list[TaskRow]
-
-    @property
-    def direct_relations(self) -> list[RelationRow]:
-        return [r for r in self.relations if r.provenance == "direct"]
-
-    @property
-    def hearsay_relations(self) -> list[RelationRow]:
-        return [r for r in self.relations if r.provenance == "hearsay"]
 
 
 def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> MeetingMinutesData:
-    """The single source of truth for what a meeting's minutes contain -
-    used both to render the stored plaintext minutes (generate_minutes
-    below) and the web app's HTML meeting view, so both are guaranteed to
-    show exactly the same underlying data, just formatted differently."""
+    """Everything the meeting view / review screen needs. Excludes rejected
+    rows; includes pending ones (flagged in the UI)."""
     with conn.cursor() as cur:
         cur.execute(
             """
-            select m.meeting_date, m.location, m.audio_url, m.raw_transcript, pc.canonical_name, pc.id
+            select m.meeting_date, m.location, m.audio_url, m.raw_transcript, m.summary, m.review_status,
+                   pc.canonical_name, pc.id
             from meetings m
             left join entities pc on pc.id = m.primary_contact_id
             where m.id = %s
@@ -63,37 +65,39 @@ def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> Mee
         row = cur.fetchone()
         if row is None:
             raise ValueError(f"No meeting found with id {meeting_id}")
-        meeting_date, location, audio_url, raw_transcript, primary_contact_name, primary_contact_id = row
+        meeting_date, location, audio_url, raw_transcript, summary, review_status, pc_name, pc_id = row
 
         cur.execute(
             """
-            select e1.canonical_name, e1.id, r.relation_type, e2.canonical_name, e2.id, r.provenance
+            select e1.canonical_name, e1.id, e2.canonical_name, e2.id,
+                   r.description, r.role_tag, r.provenance, r.confidence, r.review_status, r.source_quote, r.id
             from relations r
             join entities e1 on e1.id = r.source_id
             join entities e2 on e2.id = r.target_id
-            where r.meeting_id = %s and r.status = 'active'
+            where r.meeting_id = %s and r.review_status <> 'rejected'
             order by (r.provenance = 'hearsay'), e1.canonical_name
             """,
             (meeting_id,),
         )
-        relations = [
-            RelationRow(source, str(source_id), relation_type, target, str(target_id), provenance)
-            for source, source_id, relation_type, target, target_id, provenance in cur.fetchall()
+        connections = [
+            ConnectionRow(s, str(sid), t, str(tid), desc, role, prov, conf, rs, sq, str(rid))
+            for s, sid, t, tid, desc, role, prov, conf, rs, sq, rid in cur.fetchall()
         ]
 
         cur.execute(
             """
-            select t.description, e.canonical_name, e.id, t.due_date, t.status
+            select t.description, e.canonical_name, e.id, t.due_date, t.status,
+                   t.confidence, t.review_status, t.source_quote, t.id
             from tasks t
             left join entities e on e.id = t.related_entity_id
-            where t.meeting_id = %s
+            where t.meeting_id = %s and t.review_status <> 'rejected'
             order by t.due_date nulls last
             """,
             (meeting_id,),
         )
         tasks = [
-            TaskRow(description, related_name, (str(related_id) if related_id else None), due_date, status)
-            for description, related_name, related_id, due_date, status in cur.fetchall()
+            TaskRow(desc, name, (str(eid) if eid else None), due, status, conf, rs, sq, str(tid))
+            for desc, name, eid, due, status, conf, rs, sq, tid in cur.fetchall()
         ]
 
     return MeetingMinutesData(
@@ -102,73 +106,49 @@ def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> Mee
         location=location,
         audio_url=audio_url,
         raw_transcript=raw_transcript,
-        primary_contact_name=primary_contact_name,
-        primary_contact_id=(str(primary_contact_id) if primary_contact_id else None),
-        relations=relations,
+        summary=summary,
+        review_status=review_status,
+        primary_contact_name=pc_name,
+        primary_contact_id=(str(pc_id) if pc_id else None),
+        connections=connections,
         tasks=tasks,
     )
 
 
-def generate_minutes(conn: psycopg.Connection, meeting_id: str) -> str:
-    """Render a meeting's stored relations/tasks into readable plaintext
-    minutes (stored on meetings.minutes; also what the CLI prints).
-
-    This is a pure formatter over rows already in the DB - no LLM call, no
-    independent summarization of the transcript. The minutes can never say
-    anything the graph doesn't already contain: if something's missing here,
-    it's missing from the graph, not just from this summary, so a correction
-    made from reading the minutes fixes the real data.
-    """
-    data = fetch_meeting_minutes_data(conn, meeting_id)
+def generate_readback(conn: psycopg.Connection, meeting_id: str) -> str:
+    """The 'here's what I understood' plaintext recap - the LLM summary plus
+    the structured connections and tasks, and the raw transcript to check
+    against. Also what the CLI prints."""
+    d = fetch_meeting_minutes_data(conn, meeting_id)
 
     lines = [
-        "MEETING MINUTES",
-        f"Meeting ID     : {data.meeting_id}",
-        f"Date           : {data.meeting_date}",
-        f"Primary contact: {data.primary_contact_name or '(none)'}",
-        f"Location       : {data.location or '(not recorded)'}",
+        "MEETING",
+        f"Date           : {d.meeting_date}",
+        f"Primary contact: {d.primary_contact_name or '(none)'}",
+        f"Review         : {d.review_status}",
+        "",
+        "SUMMARY",
+        d.summary or "(none)",
+        "",
+        "CONNECTIONS",
     ]
-    if data.audio_url:
-        lines.append(f"Audio file     : {data.audio_url}")
-
-    lines += ["", "RELATIONSHIPS"]
-    if data.direct_relations:
-        lines.append("  Direct:")
-        lines += [f"    - {r.source} {r.relation_type} {r.target}" for r in data.direct_relations]
-    if data.hearsay_relations:
-        lines.append("  Hearsay (unverified):")
-        lines += [f"    - {r.source} {r.relation_type} {r.target}" for r in data.hearsay_relations]
-    if not data.relations:
-        lines.append("  (none extracted)")
+    if d.connections:
+        for c in d.connections:
+            flag = "" if c.review_status == "auto_confirmed" else f"  [{c.review_status}, {c.confidence}]"
+            tag = f" ({c.role_tag})" if c.role_tag else ""
+            lines.append(f"  - {c.description}{tag} [{c.provenance}]{flag}")
+    else:
+        lines.append("  (none)")
 
     lines += ["", "TASKS"]
-    if data.tasks:
-        for t in data.tasks:
-            due_str = f"due {t.due_date}" if t.due_date else "no due date"
+    if d.tasks:
+        for t in d.tasks:
+            due = f"due {t.due_date}" if t.due_date else "no due date"
             ref = f" -- re: {t.related_entity_name}" if t.related_entity_name else ""
-            marker = "x" if t.status == "done" else " "
-            lines.append(f"  [{marker}] {t.description} ({due_str}){ref}")
+            flag = "" if t.review_status == "auto_confirmed" else f"  [{t.review_status}, {t.confidence}]"
+            lines.append(f"  [ ] {t.description} ({due}){ref}{flag}")
     else:
-        lines.append("  (none extracted)")
+        lines.append("  (none)")
 
-    lines += [
-        "",
-        "-" * 70,
-        "RAW TRANSCRIPT (check the above against this -- if something's missing above,",
-        "it's missing from the graph, not just this summary; correct it with a follow-up",
-        "voice note appended to this meeting)",
-        "",
-        data.raw_transcript or "(no transcript stored)",
-    ]
-
+    lines += ["", "-" * 70, "RAW TRANSCRIPT", "", d.raw_transcript or "(none)"]
     return "\n".join(lines)
-
-
-def store_minutes(conn: psycopg.Connection, meeting_id: str) -> str:
-    minutes = generate_minutes(conn, meeting_id)
-    with conn.cursor() as cur:
-        cur.execute(
-            "update meetings set minutes = %s, minutes_generated_at = now() where id = %s",
-            (minutes, meeting_id),
-        )
-    return minutes

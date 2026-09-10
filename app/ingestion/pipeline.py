@@ -1,181 +1,156 @@
-"""Shared ingestion pipeline used by both the CLI (scripts/ingest_audio.py)
-and the web app's correction form - one code path, so a correction behaves
-identically no matter how it was submitted.
+"""Shared ingestion pipeline: transcript -> extract + verify -> LLM entity
+resolution -> write meeting/connections/tasks, each row carrying a confidence
+and a review_status. High-confidence, transcript-verified items are
+auto_confirmed (live, spot-checkable); everything else is pending until the
+office boy clears it in the review UI.
+
+Used by both the CLI (scripts/ingest_audio.py) and the web app.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Callable, Optional
 
 import psycopg
 
-from app.entity_resolution.resolve import resolve_entity
+from app.entity_resolution.resolve import ResolutionResult, resolve_entity
 from app.extraction.extractor import extract
 from app.extraction.resolve_dates import resolve_due_date
 from app.ingestion.failures import record_failure
-from app.minutes.generate import store_minutes
-
-
-@dataclass
-class ResolutionLogEntry:
-    name: str
-    entity_type: str
-    outcome: str
-    canonical_name: str
-    possible_duplicate_of: Optional[str] = None
 
 
 @dataclass
 class IngestResult:
     meeting_id: str
-    relation_count: int
+    entity_count: int
+    connection_count: int
     task_count: int
-    minutes: str
-    resolution_log: list[ResolutionLogEntry]
+    auto_confirmed: int
+    pending: int
+    resolutions: list[ResolutionResult] = field(default_factory=list)
 
 
-OnResolved = Optional[Callable[[ResolutionLogEntry], None]]
+OnResolved = Optional[Callable[[str, ResolutionResult], None]]
 
 
-def _resolve_all_entities(
-    conn, entities, on_resolved: OnResolved = None, interactive: bool = True
-) -> tuple[dict, list[ResolutionLogEntry]]:
-    resolved = {}
-    log: list[ResolutionLogEntry] = []
-    for entity in entities:
-        result = resolve_entity(conn, entity.name, entity.entity_type, interactive=interactive)
-        resolved[entity.name] = result
-        entry = ResolutionLogEntry(
-            entity.name, entity.entity_type, result.outcome, result.canonical_name, result.possible_duplicate_of
+def _row_status(confidence: Optional[str]) -> str:
+    return "auto_confirmed" if confidence == "high" else "pending"
+
+
+def _resolve_entities(conn, entities, transcript, on_resolved: OnResolved) -> dict:
+    """extracted name -> ResolutionResult"""
+    resolved: dict[str, ResolutionResult] = {}
+    for e in entities:
+        r = resolve_entity(
+            conn, e.name, e.entity_type, transcript,
+            extraction_confidence=e.confidence,
+            attrs={"title": e.title, "phone": e.phone, "email": e.email, "region": e.region},
         )
-        log.append(entry)
+        resolved[e.name] = r
         if on_resolved:
-            on_resolved(entry)
-    return resolved, log
+            on_resolved(e.name, r)
+    return resolved
 
 
-def _resolve_name(
-    conn, resolved: dict, name: str, log: list, on_resolved: OnResolved, interactive: bool, fallback_entity_type: str = "company"
-):
-    """Look up an already-resolved entity by name; if a relationship/task
-    references a name that wasn't in the extracted entities list (extraction
-    inconsistency), resolve it on the fly instead of failing the whole run."""
+def _resolve_ref(conn, resolved: dict, name: str, transcript: str, on_resolved: OnResolved, fallback: str = "company") -> str:
+    """A connection/task referenced a name; return its entity_id, resolving on
+    the fly if the extraction didn't list it as an entity."""
     if name in resolved:
         return resolved[name].entity_id
-    result = resolve_entity(conn, name, fallback_entity_type, interactive=interactive)
-    resolved[name] = result
-    entry = ResolutionLogEntry(
-        name, fallback_entity_type, result.outcome, result.canonical_name, result.possible_duplicate_of
-    )
-    log.append(entry)
+    r = resolve_entity(conn, name, fallback, transcript, extraction_confidence="low")
+    resolved[name] = r
     if on_resolved:
-        on_resolved(entry)
-    return result.entity_id
+        on_resolved(name, r)
+    return r.entity_id
 
 
-def get_existing_meeting(conn, meeting_id: str) -> tuple[date, Optional[str]]:
+def _write_meeting_body(conn, result, resolved, on_resolved, meeting_id, meeting_date, transcript) -> tuple[int, int, int, int]:
+    conn_count = auto = pending = 0
+    seen: set = set()
     with conn.cursor() as cur:
-        cur.execute("select meeting_date, primary_contact_id from meetings where id = %s", (meeting_id,))
-        row = cur.fetchone()
-        if row is None:
-            raise ValueError(f"No meeting found with id {meeting_id!r}")
-        return row[0], (str(row[1]) if row[1] else None)
-
-
-def _get_existing_relation_keys(conn, meeting_id: str) -> set:
-    """Pre-seed dedup with what's already on this meeting, so a correction
-    that accidentally restates something already captured doesn't insert a
-    same-meeting duplicate (cross-meeting duplicates are fine - that's how
-    corroboration works)."""
-    with conn.cursor() as cur:
-        cur.execute("select source_id, relation_type, target_id from relations where meeting_id = %s", (meeting_id,))
-        return {(str(s), r, str(t)) for s, r, t in cur.fetchall()}
-
-
-def _write_relations_and_tasks(
-    conn, result, resolved, log, on_resolved, meeting_id, meeting_date, seen_relations, interactive: bool
-) -> tuple[int, int]:
-    relation_count = 0
-    with conn.cursor() as cur:
-        for triple in result.relationships:
-            source_id = _resolve_name(conn, resolved, triple.source, log, on_resolved, interactive)
-            target_id = _resolve_name(conn, resolved, triple.target, log, on_resolved, interactive)
-            key = (source_id, triple.relation, target_id)
-            if key in seen_relations:
+        for c in result.connections:
+            sid = _resolve_ref(conn, resolved, c.source, transcript, on_resolved)
+            tid = _resolve_ref(conn, resolved, c.target, transcript, on_resolved)
+            key = (sid, c.suggested_role, tid)
+            if key in seen:
                 continue
-            seen_relations.add(key)
+            seen.add(key)
+            status = _row_status(c.confidence)
             cur.execute(
-                """
-                insert into relations (source_id, target_id, relation_type, meeting_id, provenance, recorded_at)
-                values (%s, %s, %s, %s, %s, %s)
-                """,
-                (source_id, target_id, triple.relation, meeting_id, triple.provenance, meeting_date),
+                "insert into relations (source_id, target_id, role_tag, meeting_id, provenance, recorded_at, "
+                "description, source_quote, confidence, review_status) "
+                "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (sid, tid, c.suggested_role, meeting_id, c.provenance, meeting_date,
+                 c.description, c.source_quote, c.confidence, status),
             )
-            relation_count += 1
+            conn_count += 1
+            auto, pending = (auto + 1, pending) if status == "auto_confirmed" else (auto, pending + 1)
 
     task_count = 0
     with conn.cursor() as cur:
-        for task in result.tasks:
-            related_entity_id = (
-                _resolve_name(conn, resolved, task.target_entity, log, on_resolved, interactive)
-                if task.target_entity
-                else None
-            )
-            due_date = resolve_due_date(meeting_date, task.relative_due)
+        for t in result.tasks:
+            rel_id = _resolve_ref(conn, resolved, t.target_entity, transcript, on_resolved) if t.target_entity else None
+            due = resolve_due_date(meeting_date, t.relative_due)
+            status = _row_status(t.confidence)
             cur.execute(
-                """
-                insert into tasks (description, related_entity_id, meeting_id, due_date)
-                values (%s, %s, %s, %s)
-                """,
-                (task.description, related_entity_id, meeting_id, due_date),
+                "insert into tasks (description, related_entity_id, meeting_id, due_date, confidence, "
+                "source_quote, review_status) values (%s,%s,%s,%s,%s,%s,%s)",
+                (t.description, rel_id, meeting_id, due, t.confidence, t.source_quote, status),
             )
             task_count += 1
+            auto, pending = (auto + 1, pending) if status == "auto_confirmed" else (auto, pending + 1)
 
-    return relation_count, task_count
+    return conn_count, task_count, auto, pending
+
+
+def _finalise_meeting_status(conn, meeting_id) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            update meetings set review_status = case when exists (
+                select 1 from relations where meeting_id = %(m)s and review_status = 'pending'
+                union all select 1 from tasks where meeting_id = %(m)s and review_status = 'pending'
+                union all select 1 from entities e
+                    join relations r on r.meeting_id = %(m)s and (r.source_id = e.id or r.target_id = e.id)
+                    where e.review_status = 'pending'
+            ) then 'pending' else 'clear' end
+            where id = %(m)s
+            """,
+            {"m": meeting_id},
+        )
 
 
 def ingest_new_meeting(
     conn: psycopg.Connection,
     transcript: str,
     meeting_date: date,
-    primary_contact_name: str,
+    primary_contact_name: Optional[str] = None,
     location: Optional[str] = None,
     audio_path: Optional[str] = None,
     on_resolved: OnResolved = None,
-    interactive: bool = True,
 ) -> IngestResult:
-    """Create a brand-new meeting from a transcript. Commits on success;
-    rolls back and records a retryable failure (see app.ingestion.failures)
-    on any error.
-
-    interactive=False must be used from any non-terminal caller (e.g. a web
-    request) - see resolve_entity()'s docstring for why: the confirm-queue
-    reads from stdin and would hang the caller forever otherwise.
-    """
     try:
         result = extract(transcript)
-        resolved, log = _resolve_all_entities(conn, result.entities, on_resolved, interactive)
-        primary_contact_id = _resolve_name(
-            conn, resolved, primary_contact_name, log, on_resolved, interactive, fallback_entity_type="person"
-        )
+        resolved = _resolve_entities(conn, result.entities, transcript, on_resolved)
+
+        primary_id = None
+        if primary_contact_name:
+            primary_id = _resolve_ref(conn, resolved, primary_contact_name, transcript, on_resolved, fallback="person")
 
         with conn.cursor() as cur:
             cur.execute(
-                """
-                insert into meetings (meeting_date, primary_contact_id, location, raw_transcript, audio_url)
-                values (%s, %s, %s, %s, %s)
-                returning id
-                """,
-                (meeting_date, primary_contact_id, location, transcript, audio_path),
+                "insert into meetings (meeting_date, primary_contact_id, location, raw_transcript, audio_url, summary) "
+                "values (%s,%s,%s,%s,%s,%s) returning id",
+                (meeting_date, primary_id, location, transcript, audio_path, result.summary),
             )
             (meeting_id,) = cur.fetchone()
 
-        relation_count, task_count = _write_relations_and_tasks(
-            conn, result, resolved, log, on_resolved, meeting_id, meeting_date, set(), interactive
+        cc, tc, auto, pending = _write_meeting_body(
+            conn, result, resolved, on_resolved, meeting_id, meeting_date, transcript
         )
-        minutes = store_minutes(conn, meeting_id)
+        _finalise_meeting_status(conn, meeting_id)
         conn.commit()
-        return IngestResult(str(meeting_id), relation_count, task_count, minutes, log)
+        return IngestResult(str(meeting_id), len(resolved), cc, tc, auto, pending, list(resolved.values()))
     except Exception as exc:
         conn.rollback()
         record_failure(conn, meeting_date, audio_path, transcript, exc)
@@ -188,37 +163,28 @@ def append_correction(
     transcript: str,
     audio_path: Optional[str] = None,
     on_resolved: OnResolved = None,
-    interactive: bool = True,
 ) -> IngestResult:
-    """Append a correction voice note/text to an existing meeting: resolves
-    entities against the whole DB as usual, dedupes relations already on
-    this meeting, preserves the correction's own transcript text alongside
-    the original, and regenerates minutes. Commits on success; rolls back
-    and records a retryable failure on any error.
-
-    interactive=False must be used from any non-terminal caller - see
-    ingest_new_meeting()'s docstring.
-    """
     meeting_date = None
     try:
-        meeting_date, _ = get_existing_meeting(conn, meeting_id)
-        seen_relations = _get_existing_relation_keys(conn, meeting_id)
-
         with conn.cursor() as cur:
+            cur.execute("select meeting_date from meetings where id = %s", (meeting_id,))
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"No meeting {meeting_id!r}")
+            meeting_date = row[0]
             cur.execute(
                 "update meetings set raw_transcript = raw_transcript || %s where id = %s",
                 (f"\n\n--- Correction (appended {date.today().isoformat()}) ---\n\n{transcript}", meeting_id),
             )
 
         result = extract(transcript)
-        resolved, log = _resolve_all_entities(conn, result.entities, on_resolved, interactive)
-
-        relation_count, task_count = _write_relations_and_tasks(
-            conn, result, resolved, log, on_resolved, meeting_id, meeting_date, seen_relations, interactive
+        resolved = _resolve_entities(conn, result.entities, transcript, on_resolved)
+        cc, tc, auto, pending = _write_meeting_body(
+            conn, result, resolved, on_resolved, meeting_id, meeting_date, transcript
         )
-        minutes = store_minutes(conn, meeting_id)
+        _finalise_meeting_status(conn, meeting_id)
         conn.commit()
-        return IngestResult(meeting_id, relation_count, task_count, minutes, log)
+        return IngestResult(str(meeting_id), len(resolved), cc, tc, auto, pending, list(resolved.values()))
     except Exception as exc:
         conn.rollback()
         record_failure(conn, meeting_date or date.today(), audio_path, transcript, exc)

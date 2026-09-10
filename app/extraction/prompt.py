@@ -1,92 +1,52 @@
-from pathlib import Path
+from app.extraction.schema import SUGGESTED_ROLES
 
-import yaml
-
-CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "relation_types.yaml"
-
-SYSTEM_PROMPT_TEMPLATE = """You are extracting structured data from the transcript of a field-sales \
+SYSTEM_PROMPT = f"""You are extracting structured data from the transcript of a field-sales \
 meeting recap. The speaker is a salesperson for Sapcon Instruments, an Indian manufacturer of \
-level and speed-monitoring instruments sold through channel partners to process industries \
-(cement, steel, pharma, dairy, fertilizer).
+level and speed-monitoring instruments sold into process industries (cement, steel, pharma, dairy, \
+edible oil, fertiliser) through consultants, OEMs/integrators, and end users who refer business to \
+each other.
 
-Extract three things:
+Extract four things.
 
-0. Every distinct entity mentioned anywhere in your output below (as a relationship source/target, \
-or a task's target_entity) — list each one exactly once, with its type: "person", "company", or \
-"site". Use the same exact name spelling everywhere you reference that entity in this response.
+1. ENTITIES - every distinct person, company, or site mentioned. For each: the name (use one exact \
+spelling and reuse it everywhere below), type ("person" / "company" / "site"), and any details \
+actually stated - title/designation, phone, email, region or state. Leave a detail null if it \
+wasn't said. Never invent a name; if the speaker met someone whose name he didn't catch, still \
+record the entity with a descriptive name like "unnamed contact at Reliance Cement".
 
-1. Relationship triples between entities (people, companies, or sites) mentioned in the transcript.
-   Each triple has a source, a relation type, and a target. Getting the DIRECTION right matters — \
-source and target are not interchangeable, and each relation type below has exactly one correct \
-direction:
+2. CONNECTIONS - relationships between two named entities. Write each as a plain-language sentence \
+that states the relationship as the speaker described it (e.g. "ABC Consulting is the consultant on \
+Reliance Cement's plant expansion", "Thermo Engineering referred ABC Consulting to us"). \
+- No entity has a fixed role. The same company can be an OEM on one deal and an end user on \
+another. Extract each connection independently from what is stated in THIS transcript; never infer \
+a role from a role the entity played in a different connection. \
+- suggested_role: optionally tag the connection with a short role word if it's unambiguous. \
+Common ones: {", ".join(SUGGESTED_ROLES)}. Use your own word if those don't fit, or leave it null \
+if the role isn't clear. This tag is just a hint - getting it wrong is harmless, forcing one is worse. \
+- provenance answers ONE question: is the speaker relaying this firsthand, or passing on something \
+a third party told him? "direct" = someone present has firsthand knowledge (describing their own \
+company, their own customers/partners, something they witnessed) - this holds even if the other \
+entity isn't present and even if the fact is tentative or hasn't happened yet. "hearsay" = the \
+speaker is relaying an unverified claim from someone not present and not personally involved. \
+provenance is NEVER about how certain the fact is - only about the source.
 
-{relation_type_guide}
+3. TASKS - things the speaker said he needs to do. For each: what needs doing, the entity it \
+relates to (if any), and relative_due as an amount + unit ("day"/"week"/"month") if a timeframe was \
+mentioned - do NOT compute a date, just the amount and unit. Omit relative_due if no timeframe.
 
-   Do not emit the same underlying fact as two mirrored triples (for example both "A distributor_for \
-B" and "B end_user_of A" describing the same relationship) — pick the single relation type and \
-direction that best matches what was actually stated, and emit it once.
+4. SUMMARY - a short, clean prose recap of the meeting: who was met, what was discussed, what \
+matters. This is read by a human before the next meeting.
 
-   No entity has a fixed role. The same entity can be an OEM on one deal and a consultant or end \
-user on another — extract each relationship fact independently, from what is actually stated in \
-this transcript, and never infer or assume a role for an entity based on a role it played in a \
-different relation.
+CONFIDENCE - rate every entity, connection, and task:
+- "high": clearly and unambiguously stated.
+- "medium": implied, partially unclear, or you had to interpret slightly.
+- "low": vague, hedged, garbled in the transcript, or you're essentially guessing.
+Do not omit something just because it's low-confidence - record it and mark it low.
 
-   For each triple, mark provenance. Provenance answers exactly one question - is the informant \
-speaking firsthand, or relaying a claim someone else made? It is a completely separate question \
-from whether the fact itself is certain, settled, or has already happened. NEVER use provenance to \
-encode uncertainty — a firsthand claim about a tentative future plan is still "direct", not \
-"hearsay", just because the plan hasn't happened yet.
-   - "direct": someone present in this meeting has firsthand knowledge of the fact — e.g. they are \
-describing their own company, their own customers, partners, or contractors, or something they \
-personally witnessed. Two things do NOT disqualify a fact from being direct: (1) the other entity \
-in the relation does not need to be present itself, and (2) the fact does not need to be settled, \
-confirmed, or already true.
-     Example: Rajesh (present, owner of Indocem) says Ambuja Cement is one of Indocem's end users. \
-Ambuja itself isn't present, but Rajesh has firsthand knowledge of his own company's customers — \
-direct.
-     Example: Suresh (present) says his own workshop is thinking about becoming an end user of a \
-product line. This is direct — Suresh has firsthand knowledge of his own company's plans — even \
-though the plan itself is tentative and hasn't happened yet. Do not mark this hearsay just because \
-it's uncertain.
-   - "hearsay": the speaker is relaying a claim from a third party who is NOT present in this \
-meeting and not personally involved in the fact being described, which the speaker has not \
-independently verified.
-     Example: Rajesh relays that he heard from an unnamed contact at a trade fair that "Shree \
-Distributors might become a distributor" for Sapcon. Rajesh has no firsthand knowledge of Shree \
-Distributors' own plans — he's relaying an unverified third-party claim — hearsay.
-   Extract relations even when they describe something tentative, aspirational, or not yet \
-confirmed (e.g. "might become", "trying to", "is thinking about") — never omit a relation just \
-because it describes a possibility rather than a settled fact. This applies equally to direct and \
-hearsay relations; tentativeness never changes which provenance value to use.
-
-2. Tasks or commitments the speaker mentioned needing to do. For each task, extract:
-   - description: what needs to be done
-   - target_entity: the entity the task relates to, if any
-   - relative_due: if a due date was mentioned relative to today (e.g. "in two weeks", "by next \
-month"), extract it as an amount and a unit (day, week, or month). Do NOT compute an absolute \
-date yourself — just extract the amount and unit as stated. Omit relative_due entirely if no \
-timeframe was mentioned.
-
-Only extract what is actually stated or clearly implied in the transcript. Do not invent entities \
-or relationships that aren't mentioned.
+Only extract what is actually in the transcript. Do not fill gaps. If a field named source_quote \
+appears in the schema, leave it empty - it is filled by a later step.
 """
 
 
-def load_relation_type_specs() -> list[dict]:
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    return data["relation_types"]
-
-
-def load_relation_types() -> list[str]:
-    return [spec["name"] for spec in load_relation_type_specs()]
-
-
-def _format_relation_type_guide(specs: list[dict]) -> str:
-    lines = [f'   - {spec["name"]}: {spec["description"]} Example: "{spec["example"]}"' for spec in specs]
-    return "\n".join(lines)
-
-
 def build_system_prompt() -> str:
-    specs = load_relation_type_specs()
-    return SYSTEM_PROMPT_TEMPLATE.format(relation_type_guide=_format_relation_type_guide(specs))
+    return SYSTEM_PROMPT

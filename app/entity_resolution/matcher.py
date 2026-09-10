@@ -3,10 +3,6 @@ from dataclasses import dataclass
 import jellyfish
 import psycopg
 
-# Thresholds per PLAN.md ambiguity #3 — starting points, tuned against real
-# data once available.
-AUTO_LINK_THRESHOLD = 0.7
-CONFIRM_THRESHOLD = 0.4
 PHONETIC_BONUS = 0.15
 
 
@@ -15,17 +11,21 @@ class Candidate:
     id: str
     canonical_name: str
     aliases: list[str]
+    entity_type: str
+    title: str | None
+    region: str | None
     score: float
 
 
-def find_candidates(conn: psycopg.Connection, name: str, entity_type: str, limit: int = 5) -> list[Candidate]:
-    """Trigram similarity (against canonical_name and every alias) as the
-    primary signal, with a phonetic (metaphone) match as a secondary bonus —
-    see PLAN.md "Flags on the cost policy" #2 for why phonetic over embeddings."""
+def find_candidates(conn: psycopg.Connection, name: str, entity_type: str, limit: int = 6) -> list[Candidate]:
+    """Cheap retrieval only - trigram (against canonical_name + aliases) plus a
+    phonetic-match bonus for ranking. The actual match/new/uncertain decision
+    is made by an LLM in llm_resolve.py with this shortlist + transcript
+    context; nothing here decides anything."""
     with conn.cursor() as cur:
         cur.execute(
             """
-            select id, canonical_name, aliases,
+            select id, canonical_name, aliases, entity_type, title, region,
                    greatest(
                        similarity(canonical_name, %(name)s),
                        coalesce((select max(similarity(alias, %(name)s)) from unnest(aliases) as alias), 0)
@@ -41,12 +41,20 @@ def find_candidates(conn: psycopg.Connection, name: str, entity_type: str, limit
 
     name_code = jellyfish.metaphone(name)
     candidates = []
-    for entity_id, canonical_name, aliases, trigram_score in rows:
+    for entity_id, canonical_name, aliases, etype, title, region, trigram_score in rows:
         score = float(trigram_score)
         if name_code and jellyfish.metaphone(canonical_name) == name_code:
             score = min(1.0, score + PHONETIC_BONUS)
         candidates.append(
-            Candidate(id=str(entity_id), canonical_name=canonical_name, aliases=aliases or [], score=score)
+            Candidate(
+                id=str(entity_id),
+                canonical_name=canonical_name,
+                aliases=aliases or [],
+                entity_type=etype,
+                title=title,
+                region=region,
+                score=score,
+            )
         )
 
     candidates.sort(key=lambda c: c.score, reverse=True)

@@ -1,12 +1,17 @@
 from typing import Literal, Optional
 
-from pydantic import BaseModel, create_model
-
-from app.extraction.prompt import load_relation_types
+from pydantic import BaseModel
 
 TOOL_NAME = "record_extraction"
 
-ENTITY_TYPES = ["person", "company", "site"]
+Confidence = Literal["high", "medium", "low"]
+EntityType = Literal["person", "company", "site"]
+Provenance = Literal["direct", "hearsay"]
+
+# Suggested role tags for connections - offered to the model as a hint, NOT
+# enforced. The model may use its own word, leave it null, or the office boy
+# edits it later. Nothing branches on this value.
+SUGGESTED_ROLES = ["consultant", "advisory", "oem", "end_user", "employer", "competitor", "referral"]
 
 
 class RelativeDue(BaseModel):
@@ -16,101 +21,78 @@ class RelativeDue(BaseModel):
 
 class ExtractedEntity(BaseModel):
     name: str
-    entity_type: Literal["person", "company", "site"]
+    entity_type: EntityType
+    title: Optional[str] = None       # designation/department, if stated
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    region: Optional[str] = None      # zone/state, if stated
+    confidence: Confidence
 
 
-class ExtractedTriple(BaseModel):
-    source: str
-    relation: str
-    target: str
-    provenance: Literal["direct", "hearsay"]
+class ExtractedConnection(BaseModel):
+    source: str                       # entity name the connection is from
+    target: str                       # entity name the connection is to
+    description: str                  # plain-language sentence stating the connection
+    suggested_role: Optional[str] = None
+    provenance: Provenance
+    confidence: Confidence
+    source_quote: Optional[str] = None   # filled by the verification pass, not the extraction model
 
 
 class ExtractedTask(BaseModel):
     description: str
     target_entity: Optional[str] = None
     relative_due: Optional[RelativeDue] = None
+    confidence: Confidence
+    source_quote: Optional[str] = None   # filled by the verification pass
 
 
 class ExtractionResult(BaseModel):
     entities: list[ExtractedEntity]
-    relationships: list[ExtractedTriple]
+    connections: list[ExtractedConnection]
     tasks: list[ExtractedTask]
-
-
-def build_dynamic_result_model() -> type[BaseModel]:
-    """A pydantic model class equivalent to ExtractionResult, but with
-    `relation` constrained to a Literal built fresh from config/relation_types.yaml.
-    Used as the response_schema for providers (e.g. Gemini) that accept a
-    pydantic model directly for schema-constrained output, so the vocabulary
-    stays a one-line config change there too. Convert the result back to
-    ExtractionResult via ExtractionResult(**result.model_dump()) so callers
-    only ever deal with the stable public models."""
-    relation_types = load_relation_types()
-    relation_literal = Literal[tuple(relation_types)]  # type: ignore[valid-type]
-
-    dynamic_triple = create_model(
-        "DynamicExtractedTriple",
-        source=(str, ...),
-        relation=(relation_literal, ...),
-        target=(str, ...),
-        provenance=(Literal["direct", "hearsay"], ...),
-    )
-    return create_model(
-        "DynamicExtractionResult",
-        entities=(list[ExtractedEntity], ...),
-        relationships=(list[dynamic_triple], ...),
-        tasks=(list[ExtractedTask], ...),
-    )
+    summary: str                      # clean prose recap of the meeting
 
 
 def build_tool_schema() -> dict:
-    """JSON schema for the forced tool-use call. Relation vocabulary is read
-    from config/relation_types.yaml at call time — swap that file, not this
-    function, to change the vocabulary."""
-    relation_types = load_relation_types()
+    """Anthropic forced-tool-use schema. Mirrors ExtractionResult. No enum on
+    role - it's a free string hint only."""
+    conf = {"type": "string", "enum": ["high", "medium", "low"]}
     return {
         "name": TOOL_NAME,
-        "description": "Record entities, relationship triples, and tasks extracted from the meeting transcript.",
+        "description": "Record entities, connections, tasks, and a summary extracted from the meeting transcript.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "entities": {
                     "type": "array",
-                    "description": (
-                        "Every distinct entity mentioned anywhere in the output below (as a "
-                        "relationship source/target or a task's target_entity), listed exactly "
-                        "once each with its type."
-                    ),
                     "items": {
                         "type": "object",
                         "properties": {
                             "name": {"type": "string"},
-                            "entity_type": {"type": "string", "enum": ENTITY_TYPES},
+                            "entity_type": {"type": "string", "enum": ["person", "company", "site"]},
+                            "title": {"type": "string"},
+                            "phone": {"type": "string"},
+                            "email": {"type": "string"},
+                            "region": {"type": "string"},
+                            "confidence": conf,
                         },
-                        "required": ["name", "entity_type"],
+                        "required": ["name", "entity_type", "confidence"],
                     },
                 },
-                "relationships": {
+                "connections": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "source": {
-                                "type": "string",
-                                "description": "Name of the entity the relation originates from",
-                            },
-                            "relation": {"type": "string", "enum": relation_types},
-                            "target": {
-                                "type": "string",
-                                "description": "Name of the entity the relation points to",
-                            },
-                            "provenance": {
-                                "type": "string",
-                                "enum": ["direct", "hearsay"],
-                            },
+                            "source": {"type": "string"},
+                            "target": {"type": "string"},
+                            "description": {"type": "string", "description": "plain-language sentence"},
+                            "suggested_role": {"type": "string"},
+                            "provenance": {"type": "string", "enum": ["direct", "hearsay"]},
+                            "confidence": conf,
                         },
-                        "required": ["source", "relation", "target", "provenance"],
+                        "required": ["source", "target", "description", "provenance", "confidence"],
                     },
                 },
                 "tasks": {
@@ -119,24 +101,22 @@ def build_tool_schema() -> dict:
                         "type": "object",
                         "properties": {
                             "description": {"type": "string"},
-                            "target_entity": {
-                                "type": "string",
-                                "description": "Entity this task relates to, if any",
-                            },
+                            "target_entity": {"type": "string"},
                             "relative_due": {
                                 "type": "object",
-                                "description": "Due date relative to the meeting date, if one was mentioned",
                                 "properties": {
                                     "amount": {"type": "integer"},
                                     "unit": {"type": "string", "enum": ["day", "week", "month"]},
                                 },
                                 "required": ["amount", "unit"],
                             },
+                            "confidence": conf,
                         },
-                        "required": ["description"],
+                        "required": ["description", "confidence"],
                     },
                 },
+                "summary": {"type": "string"},
             },
-            "required": ["entities", "relationships", "tasks"],
+            "required": ["entities", "connections", "tasks", "summary"],
         },
     }
