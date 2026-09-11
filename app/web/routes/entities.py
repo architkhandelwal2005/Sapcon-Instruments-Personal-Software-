@@ -14,7 +14,7 @@ router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
 
-def _fetch_entity(conn, entity_id: str) -> dict:
+def fetch_entity(conn, entity_id: str) -> dict:
     with conn.cursor() as cur:
         cur.execute(
             "select canonical_name, entity_type, aliases, region, title, phone, email, "
@@ -31,7 +31,7 @@ def _fetch_entity(conn, entity_id: str) -> dict:
         }
 
 
-def _fetch_interaction_history(conn, entity_id: str) -> list[dict]:
+def fetch_interaction_history(conn, entity_id: str) -> list[dict]:
     """Meetings that touch this entity via a relation OR a task - a task
     with no relation is still a real meeting, and open commitments must
     never be able to disagree with interaction history about whether one
@@ -40,13 +40,15 @@ def _fetch_interaction_history(conn, entity_id: str) -> list[dict]:
     that). Works uniformly for a person (who's usually also the
     primary_contact of their own direct meetings) and a company (which
     only ever appears via relations/tasks, never as primary_contact
-    itself)."""
+    itself). Also the activity history behind a lead's profile - who
+    logged each call, reused as-is via entity_id, no lead-specific query."""
     with conn.cursor() as cur:
         cur.execute(
             """
-            select distinct m.id, m.meeting_date, pc.canonical_name
+            select distinct m.id, m.meeting_date, pc.canonical_name, lb.canonical_name
             from meetings m
             left join entities pc on pc.id = m.primary_contact_id
+            left join entities lb on lb.id = m.logged_by
             where m.id in (
                 select meeting_id from relations
                 where (source_id = %(entity_id)s or target_id = %(entity_id)s)
@@ -58,7 +60,10 @@ def _fetch_interaction_history(conn, entity_id: str) -> list[dict]:
             """,
             {"entity_id": entity_id},
         )
-        return [{"id": str(mid), "meeting_date": meeting_date, "primary_contact_name": pc_name} for mid, meeting_date, pc_name in cur.fetchall()]
+        return [
+            {"id": str(mid), "meeting_date": meeting_date, "primary_contact_name": pc_name, "logged_by_name": lb_name}
+            for mid, meeting_date, pc_name, lb_name in cur.fetchall()
+        ]
 
 
 def _fetch_open_commitments(conn, entity_id: str) -> list[dict]:
@@ -86,8 +91,8 @@ def _fetch_open_commitments(conn, entity_id: str) -> list[dict]:
 def view_entity(request: Request, entity_id: str):
     conn = get_connection()
     try:
-        entity = _fetch_entity(conn, entity_id)
-        history = _fetch_interaction_history(conn, entity_id)
+        entity = fetch_entity(conn, entity_id)
+        history = fetch_interaction_history(conn, entity_id)
         commitments = _fetch_open_commitments(conn, entity_id)
         connections = fetch_entity_connections(conn, entity_id)
         review_flags = fetch_flags_for_entity(conn, entity_id)
@@ -117,7 +122,7 @@ def view_contour(request: Request, entity_id: str):
     screens can never disagree about what's connected."""
     conn = get_connection()
     try:
-        entity = _fetch_entity(conn, entity_id)
+        entity = fetch_entity(conn, entity_id)
         connections = fetch_entity_connections(conn, entity_id)
     finally:
         conn.close()

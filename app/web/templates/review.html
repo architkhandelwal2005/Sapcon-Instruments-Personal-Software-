@@ -5,6 +5,7 @@
 <h1>Review queue</h1>
 
 {% if meetings %}
+  <h2>Meetings</h2>
   <p class="meta">Each meeting below has items the extraction could not confidently confirm. Open one to check it against the transcript.</p>
   <div class="card">
     <ul class="relation-list">
@@ -23,8 +24,27 @@
       {% endfor %}
     </ul>
   </div>
-{% else %}
-  <p class="empty">Nothing waiting. Every meeting is cleared.</p>
+{% endif %}
+
+{% if captures %}
+  <h2>Cards &amp; diary photos</h2>
+  <p class="meta">Each photo below has items to check against the source image.</p>
+  <div class="card">
+    <ul class="relation-list">
+      {% for c in captures %}
+        <li>
+          <a class="entity-link" href="/review/capture/{{ c.capture_event_id }}">
+            {{ c.captured_date }} - {{ c.capture_type }}
+          </a>
+          <span class="badge badge-pending">{{ c.pending_count }} of {{ c.total_count }} to check</span>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+{% endif %}
+
+{% if not meetings and not captures %}
+  <p class="empty">Nothing waiting. Everything is cleared.</p>
 {% endif %}
 
 {% endblock %}

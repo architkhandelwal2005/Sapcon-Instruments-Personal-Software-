@@ -39,10 +39,24 @@ def complete_json(system: str, user: str, *, max_tokens: int = 1024):
     """Call the configured model at temperature 0 and return the first JSON
     value ([...] or {...}) parsed out of its response. Retries a few times on
     transient connection errors before giving up."""
+    return _with_retries(lambda: _first_json(_raw_completion(system, user, max_tokens)))
+
+
+def complete_json_with_image(system: str, user: str, image_bytes: bytes, mime_type: str, *, max_tokens: int = 2048):
+    """Same as complete_json but the user turn also carries an image - card sheets
+    and diary pages. Same provider gate: real photographed customer data is exactly
+    as sensitive as a real transcript and must not touch the free Gemini tier
+    either."""
+    return _with_retries(
+        lambda: _first_json(_raw_completion(system, user, max_tokens, image_bytes=image_bytes, mime_type=mime_type))
+    )
+
+
+def _with_retries(call):
     last_exc: Exception | None = None
     for attempt in range(_RETRIES):
         try:
-            return _first_json(_raw_completion(system, user, max_tokens))
+            return call()
         except (ConnectionError, TimeoutError, OSError) as exc:
             last_exc = exc
         except Exception as exc:  # httpx/httpcore connect errors don't subclass the stdlib ones
@@ -54,9 +68,19 @@ def complete_json(system: str, user: str, *, max_tokens: int = 1024):
     raise last_exc  # type: ignore[misc]
 
 
-def _raw_completion(system: str, user: str, max_tokens: int) -> str:
+def _raw_completion(system: str, user: str, max_tokens: int, *, image_bytes: bytes | None = None, mime_type: str | None = None) -> str:
     if PROVIDER == "anthropic":
+        import base64
+
         import anthropic
+
+        content: list = []
+        if image_bytes is not None:
+            content.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": mime_type, "data": base64.b64encode(image_bytes).decode()},
+            })
+        content.append({"type": "text", "text": user})
 
         client = anthropic.Anthropic()
         resp = client.messages.create(
@@ -64,16 +88,18 @@ def _raw_completion(system: str, user: str, max_tokens: int) -> str:
             max_tokens=max_tokens,
             temperature=0,
             system=system,
-            messages=[{"role": "user", "content": user}],
+            messages=[{"role": "user", "content": content}],
         )
         text = "".join(b.text for b in resp.content if b.type == "text")
     elif PROVIDER == "gemini":
         from google import genai
+        from google.genai import types
 
         client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+        contents = [types.Part.from_bytes(data=image_bytes, mime_type=mime_type), user] if image_bytes is not None else user
         resp = client.models.generate_content(
             model=_GEMINI_MODEL,
-            contents=user,
+            contents=contents,
             config={
                 "system_instruction": system,
                 "response_mime_type": "application/json",

@@ -4,7 +4,7 @@
 
 {% if review_backlog %}
   <a class="review-callout" href="/review">
-    <strong>{{ review_backlog }}</strong> meeting{{ "s" if review_backlog != 1 else "" }} waiting for review
+    <strong>{{ review_backlog }}</strong> item{{ "s" if review_backlog != 1 else "" }} waiting for review
   </a>
 {% endif %}
 
@@ -14,7 +14,11 @@
 </form>
 
 <h1>Recent meetings</h1>
-<p class="meta"><a class="entity-link" href="/meetings/new">+ New meeting</a></p>
+<p class="meta">
+  <a class="entity-link" href="/meetings/new">+ New meeting</a> &middot;
+  <a class="entity-link" href="/captures/new">+ New card/diary photo</a> &middot;
+  <a class="entity-link" href="/leads">Leads</a>
+</p>
 <div class="card">
   {% if meetings %}
     <ul class="relation-list">

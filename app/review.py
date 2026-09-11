@@ -101,6 +101,110 @@ def pending_count(conn: psycopg.Connection) -> int:
         return cur.fetchone()[0]
 
 
+_CAPTURE_ENTITIES_CTE = """
+    with capture_entities as (
+        select capture_event_id, id as entity_id from entities where capture_event_id is not null
+        union
+        select capture_event_id, entity_id from leads where capture_event_id is not null
+    )
+"""
+# Two ways an entity belongs to a capture: it was newly created there
+# (entities.capture_event_id), or a lead from there points at it even though the
+# entity already existed (leads.capture_event_id) - e.g. a card names someone
+# already known from a meeting. Both paths matter for review; UNION dedupes an
+# entity that is both (new AND the lead target, the common case).
+
+
+def pending_captures(conn: psycopg.Connection) -> list[dict]:
+    """Capture events (card/diary photos) with at least one linked entity still
+    pending - capture_events has no stored review_status of its own (low volume,
+    computed is enough), unlike meetings."""
+    with conn.cursor() as cur:
+        cur.execute(
+            _CAPTURE_ENTITIES_CTE
+            + """
+            select ce.id, ce.capture_type, ce.captured_date, ce.photo_url,
+                   count(*) filter (where e.review_status = 'pending') as pending_count,
+                   count(*) as total_count
+            from capture_events ce
+            join capture_entities cx on cx.capture_event_id = ce.id
+            join entities e on e.id = cx.entity_id
+            group by ce.id, ce.capture_type, ce.captured_date, ce.photo_url
+            having count(*) filter (where e.review_status = 'pending') > 0
+            order by ce.captured_date desc
+            """
+        )
+        return [
+            {
+                "capture_event_id": str(cid), "capture_type": ctype, "captured_date": cdate,
+                "photo_url": url, "pending_count": pc, "total_count": tc,
+            }
+            for cid, ctype, cdate, url, pc, tc in cur.fetchall()
+        ]
+
+
+def pending_capture_count(conn: psycopg.Connection) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            _CAPTURE_ENTITIES_CTE
+            + """
+            select count(distinct ce.id) from capture_events ce
+            join capture_entities cx on cx.capture_event_id = ce.id
+            join entities e on e.id = cx.entity_id and e.review_status = 'pending'
+            """
+        )
+        return cur.fetchone()[0]
+
+
+def capture_detail(conn: psycopg.Connection, capture_event_id: str) -> dict:
+    """The photo plus every entity this capture touched (newly created there, or
+    already known and pointed at by one of its leads), each with its review state
+    and whatever lead it produced."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "select capture_type, captured_date, photo_url, raw_extraction, logged_by "
+            "from capture_events where id = %s",
+            (capture_event_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError(f"No capture event {capture_event_id!r}")
+        capture_type, captured_date, photo_url, raw_extraction, logged_by = row
+
+        cur.execute(
+            _CAPTURE_ENTITIES_CTE
+            + """
+            select e.id, e.canonical_name, e.entity_type, e.title, e.phone, e.email,
+                   e.review_status, e.confidence, d.canonical_name,
+                   l.id, l.status, l.assigned_to, ae.canonical_name
+            from capture_entities cx
+            join entities e on e.id = cx.entity_id
+            left join entities d on d.id = e.possible_duplicate_of
+            left join leads l on l.entity_id = e.id and l.capture_event_id = %(c)s
+            left join entities ae on ae.id = l.assigned_to
+            where cx.capture_event_id = %(c)s
+            order by (e.review_status <> 'pending') desc, e.canonical_name
+            """,
+            {"c": capture_event_id},
+        )
+        items = [
+            {
+                "entity_id": str(eid), "canonical_name": name, "entity_type": etype,
+                "title": title, "phone": phone, "email": email,
+                "review_status": rs, "confidence": conf, "possible_duplicate_of": dup,
+                "lead_id": (str(lid) if lid else None), "lead_status": lstatus,
+                "assigned_to": (str(aid) if aid else None), "assigned_name": aname,
+            }
+            for eid, name, etype, title, phone, email, rs, conf, dup, lid, lstatus, aid, aname in cur.fetchall()
+        ]
+
+    return {
+        "capture_event_id": capture_event_id, "capture_type": capture_type,
+        "captured_date": captured_date, "photo_url": photo_url,
+        "raw_extraction": raw_extraction, "logged_by": logged_by, "entries": items,
+    }
+
+
 def meeting_entities(conn: psycopg.Connection, meeting_id: str) -> list[dict]:
     """Entities attached to a meeting (primary contact or an endpoint of one of
     its non-rejected relations), with their review state and any possible

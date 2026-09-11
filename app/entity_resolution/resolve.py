@@ -31,6 +31,8 @@ def resolve_entity(
     *,
     extraction_confidence: str = "medium",
     attrs: Optional[dict] = None,
+    source: str = "meeting",
+    capture_event_id: Optional[str] = None,
 ) -> ResolutionResult:
     """Resolve a mentioned name to an entities.id via LLM match decision.
     - confident match  -> link, add spelling as alias, fill any missing attrs
@@ -38,6 +40,11 @@ def resolve_entity(
     - clearly new      -> new entity; auto_confirmed only if extraction and
                           match were both high-confidence, else pending
     Never silently merges.
+
+    `source`/`capture_event_id` only matter when a new entity actually gets
+    created here (linking to an existing one never touches its origin) - lets
+    the card/diary photo pipeline reuse this exact resolver instead of a second
+    one, same as voice notes and the historical Excel import already do.
     """
     attrs = {k: (attrs or {}).get(k) for k in ENRICHABLE}
     candidates = find_candidates(conn, name, entity_type)
@@ -55,7 +62,7 @@ def resolve_entity(
     if d.decision in ("match", "uncertain") and candidates:
         dup_id = d.match_id or candidates[0].id
         dup_name = next((c.canonical_name for c in candidates if c.id == dup_id), candidates[0].canonical_name)
-        entity_id = _create_entity(conn, name, entity_type, attrs, extraction_confidence, "pending", dup_id)
+        entity_id = _create_entity(conn, name, entity_type, attrs, extraction_confidence, "pending", dup_id, source, capture_event_id)
         _flag_for_review(conn, entity_id, dup_id, name, entity_type)
         return ResolutionResult(
             entity_id=entity_id, outcome="uncertain_created", canonical_name=name,
@@ -63,7 +70,7 @@ def resolve_entity(
         )
 
     review_status = "auto_confirmed" if extraction_confidence == "high" and d.confidence == "high" else "pending"
-    entity_id = _create_entity(conn, name, entity_type, attrs, extraction_confidence, review_status, None)
+    entity_id = _create_entity(conn, name, entity_type, attrs, extraction_confidence, review_status, None, source, capture_event_id)
     return ResolutionResult(
         entity_id=entity_id, outcome="created", canonical_name=name,
         review_status=review_status, reason=d.reason,
@@ -112,14 +119,14 @@ def _flag_for_review(conn, entity_id, possible_duplicate_id, mentioned_name, ent
         )
 
 
-def _create_entity(conn, name, entity_type, attrs, confidence, review_status, possible_duplicate_of) -> str:
+def _create_entity(conn, name, entity_type, attrs, confidence, review_status, possible_duplicate_of, source, capture_event_id) -> str:
     with conn.cursor() as cur:
         cur.execute(
             "insert into entities (canonical_name, entity_type, title, phone, email, region, "
-            "confidence, review_status, possible_duplicate_of, source) "
-            "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,'meeting') returning id",
+            "confidence, review_status, possible_duplicate_of, source, capture_event_id) "
+            "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id",
             (name, entity_type, attrs.get("title"), attrs.get("phone"), attrs.get("email"),
-             attrs.get("region"), confidence, review_status, possible_duplicate_of),
+             attrs.get("region"), confidence, review_status, possible_duplicate_of, source, capture_event_id),
         )
         (entity_id,) = cur.fetchone()
     return str(entity_id)

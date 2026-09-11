@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}New lead - Sapcon CRM{% endblock %}
+{% block content %}
+
+<h1>New lead</h1>
+
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+
+<form class="ingest-form" method="post" action="/leads/new">
+  <label>Company or person name
+    <input type="text" name="entity_name" required>
+  </label>
+  <label>Type
+    <select name="entity_type">
+      <option value="company">company</option>
+      <option value="person">person</option>
+      <option value="site">site</option>
+    </select>
+  </label>
+  <label>Assign to <span class="meta">(optional, can allot later)</span>
+    <select name="assigned_to">
+      <option value="">unassigned</option>
+      {% for e in employees %}
+        <option value="{{ e.id }}">{{ e.canonical_name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Source
+    <input type="text" name="source" value="manual">
+  </label>
+  <label>Next follow-up <span class="meta">(optional)</span>
+    <input type="date" name="next_follow_up_due">
+  </label>
+  <label>Notes <span class="meta">(optional)</span>
+    <textarea name="notes"></textarea>
+  </label>
+  <button type="submit">Create lead</button>
+</form>
+
+{% endblock %}

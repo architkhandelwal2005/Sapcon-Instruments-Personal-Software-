@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}New card/diary photo - Sapcon CRM{% endblock %}
+{% block content %}
+
+<h1>New card / diary photo</h1>
+
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+
+<p class="meta">A sheet of visiting cards, or a diary page. Extraction reads each circled allotment code and every printed/handwritten field, and lands in review next to the photo.</p>
+
+<form class="ingest-form" method="post" action="/captures/new" enctype="multipart/form-data">
+  <label>Type
+    <select name="capture_type">
+      <option value="card">Visiting cards</option>
+      <option value="diary">Diary page</option>
+    </select>
+  </label>
+  <label>Date
+    <input type="date" name="captured_date" value="{{ today }}" required>
+  </label>
+  <label>Photo
+    <input type="file" name="photo" accept="image/*" required>
+  </label>
+  <button type="submit">Process photo</button>
+</form>
+
+{% endblock %}

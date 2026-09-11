@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Leads - Sapcon CRM{% endblock %}
+{% block content %}
+
+<h1>Leads</h1>
+<p class="meta"><a class="entity-link" href="/leads/new">+ New lead</a></p>
+
+<form class="filter-form" method="get" action="/leads">
+  <select name="status">
+    <option value="">Any status</option>
+    {% for s in statuses %}
+      <option value="{{ s }}"{% if active.status == s %} selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <select name="assigned_to">
+    <option value="">Anyone</option>
+    {% for e in employees %}
+      <option value="{{ e.id }}"{% if active.assigned_to == e.id %} selected{% endif %}>{{ e.canonical_name }}</option>
+    {% endfor %}
+  </select>
+  <select name="source">
+    <option value="">Any source</option>
+    {% for s in sources %}
+      <option value="{{ s }}"{% if active.source == s %} selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Filter</button>
+  <a class="entity-link" href="/leads">Clear</a>
+</form>
+
+{% if rows %}
+  <div class="card">
+    <table class="contact-table">
+      <thead>
+        <tr><th>Lead</th><th>Assigned</th><th>Status</th><th>Next follow-up</th><th>Last activity</th></tr>
+      </thead>
+      <tbody>
+        {% for l in rows %}
+          <tr>
+            <td>
+              <a class="entity-link" href="/leads/{{ l.id }}">{{ l.canonical_name }}</a>
+              {% if l.stale %}<span class="badge badge-pending">stale &gt;{{ stale_days }}d</span>{% endif %}
+              <div class="meta">{{ l.entity_type }}{% if l.source %} &middot; {{ l.source }}{% endif %}</div>
+            </td>
+            <td>{{ l.assigned_name or "unassigned" }}</td>
+            <td><span class="badge {% if l.status == 'converted' %}badge-direct{% elif l.status == 'dropped' %}badge-pending{% else %}badge-tag{% endif %}">{{ l.status }}</span></td>
+            <td>{{ l.next_follow_up_due or "" }}</td>
+            <td>{{ l.last_activity or "never" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <p class="empty">No leads match.</p>
+{% endif %}
+
+{% endblock %}

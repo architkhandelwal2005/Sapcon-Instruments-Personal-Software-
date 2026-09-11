@@ -112,7 +112,11 @@ def ingest_new_meeting(
     location: Optional[str] = None,
     audio_path: Optional[str] = None,
     on_resolved: OnResolved = None,
+    logged_by: Optional[str] = None,
 ) -> IngestResult:
+    """logged_by: entity id of whoever recorded this interaction (the uncle, office
+    boy, or a marketing employee) - null when the concept doesn't apply (e.g. CLI
+    testing). Lets a lead's activity history be filtered to one employee's calls."""
     try:
         result = extract(transcript)
         resolved = _resolve_entities(conn, result.entities, transcript, on_resolved)
@@ -123,9 +127,9 @@ def ingest_new_meeting(
 
         with conn.cursor() as cur:
             cur.execute(
-                "insert into meetings (meeting_date, primary_contact_id, location, raw_transcript, audio_url, summary) "
-                "values (%s,%s,%s,%s,%s,%s) returning id",
-                (meeting_date, primary_id, location, transcript, audio_path, result.summary),
+                "insert into meetings (meeting_date, primary_contact_id, location, raw_transcript, audio_url, summary, logged_by) "
+                "values (%s,%s,%s,%s,%s,%s,%s) returning id",
+                (meeting_date, primary_id, location, transcript, audio_path, result.summary, logged_by),
             )
             (meeting_id,) = cur.fetchone()
 

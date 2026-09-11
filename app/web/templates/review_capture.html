@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Review {{ data.capture_type }} - Sapcon CRM{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+
+<h1>Review - {{ data.capture_type }} photo, {{ data.captured_date }}</h1>
+
+{% if done %}<div class="flash">All items checked. <a class="entity-link" href="/review">Back to the queue</a></div>{% endif %}
+
+<div class="review-layout">
+
+  <div class="review-transcript">
+    <h2>Source photo</h2>
+    <img src="{{ data.photo_url }}" alt="{{ data.capture_type }} photo" style="width:100%;border-radius:10px;">
+  </div>
+
+  <div class="review-items">
+    <h2>Extracted items</h2>
+    {% if data.entries %}
+      {% for it in data.entries %}
+        {% set settled = it.review_status in ("confirmed",) %}
+        <div class="review-item{% if settled %} settled{% endif %}">
+          <div>
+            {{ it.canonical_name }}
+            <span class="badge badge-tag">{{ it.entity_type }}</span>
+            <span class="badge {% if it.review_status in ('confirmed','auto_confirmed') %}badge-direct{% else %}badge-pending{% endif %}">{{ it.review_status }}{% if it.confidence %} &middot; {{ it.confidence }}{% endif %}</span>
+          </div>
+          <div class="meta">
+            {% if it.title %}{{ it.title }} &middot; {% endif %}
+            {% if it.phone %}{{ it.phone }} &middot; {% endif %}
+            {% if it.email %}{{ it.email }}{% endif %}
+          </div>
+          {% if it.possible_duplicate_of %}
+            <div class="meta">Might be the same as <strong>{{ it.possible_duplicate_of }}</strong>.</div>
+          {% endif %}
+          {% if it.lead_id %}
+            <div class="meta">Lead created &middot; assigned to {{ it.assigned_name or "unassigned" }} &middot;
+              <a class="entity-link" href="/leads/{{ it.lead_id }}">view lead</a>
+            </div>
+          {% endif %}
+          <form class="review-actions" method="post" action="/review/capture/{{ data.capture_event_id }}/item">
+            <input type="hidden" name="item_id" value="{{ it.entity_id }}">
+            {% if not settled %}<button name="decision" value="confirm" class="btn-confirm">Confirm</button>{% endif %}
+            <button name="decision" value="reject" class="btn-reject">Reject</button>
+          </form>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p class="empty">Nothing was extracted from this photo.</p>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}
