@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app.db import get_connection
+from app.db import get_connection, release_connection
 
 TABLES = ["entities", "meetings", "relations", "tasks", "entity_review_queue", "ingestion_failures"]
 
@@ -29,7 +29,7 @@ def main() -> None:
                 cur.execute(f"select count(*) from {t}")
                 print(f"{t}: {cur.fetchone()[0]}")
     finally:
-        conn.close()
+        release_connection(conn)
     print("Done.")
 
 

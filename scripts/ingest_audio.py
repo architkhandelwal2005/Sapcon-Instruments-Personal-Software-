@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app.db import get_connection
+from app.db import get_connection, release_connection
 from app.extraction.extractor import extract
 from app.extraction.resolve_dates import resolve_due_date
 from app.ingestion.pipeline import append_correction, ingest_new_meeting
@@ -111,7 +111,7 @@ def main() -> None:
         )
         print("\n" + generate_readback(conn, res.meeting_id))
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from app.db import get_connection
+from app.db import get_connection, release_connection
 from app.query import ask as run_ask
 from app.query import brief as run_brief
 from app.query import connect as run_connect
@@ -47,6 +47,6 @@ def ask_page(
             else:
                 ctx["understood"] = "No known contact matched - answered from recent meetings."
     finally:
-        conn.close()
+        release_connection(conn)
 
     return templates.TemplateResponse(request, "ask.html", ctx)

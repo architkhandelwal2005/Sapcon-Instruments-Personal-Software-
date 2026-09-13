@@ -6,7 +6,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from app.db import get_connection
+from app.db import get_connection, release_connection
 from app.minutes.generate import fetch_meeting_minutes_data
 from app.review import (
     apply_decision,
@@ -28,7 +28,7 @@ def review_index(request: Request):
         meetings = pending_summary(conn)
         captures = pending_captures(conn)
     finally:
-        conn.close()
+        release_connection(conn)
     return templates.TemplateResponse(request, "review.html", {"meetings": meetings, "captures": captures})
 
 
@@ -40,7 +40,7 @@ def review_meeting(request: Request, meeting_id: str, done: Optional[int] = None
         entities = meeting_entities(conn, meeting_id)
         rejected = rejected_items(conn, meeting_id)
     finally:
-        conn.close()
+        release_connection(conn)
     return templates.TemplateResponse(
         request,
         "review_meeting.html",
@@ -75,7 +75,7 @@ def review_item(
         )
         remaining = [m for m in pending_summary(conn) if m["meeting_id"] == meeting_id]
     finally:
-        conn.close()
+        release_connection(conn)
 
     if not remaining:
         return RedirectResponse(f"/review/{meeting_id}?done=1", status_code=303)
@@ -88,7 +88,7 @@ def review_capture(request: Request, capture_event_id: str, done: Optional[int] 
     try:
         data = capture_detail(conn, capture_event_id)
     finally:
-        conn.close()
+        release_connection(conn)
     return templates.TemplateResponse(request, "review_capture.html", {"data": data, "done": done})
 
 
@@ -100,7 +100,7 @@ def review_capture_item(capture_event_id: str, item_id: str = Form(...), decisio
         remaining = capture_detail(conn, capture_event_id)
         still_pending = any(i["review_status"] == "pending" for i in remaining["entries"])
     finally:
-        conn.close()
+        release_connection(conn)
 
     if not still_pending:
         return RedirectResponse(f"/review/capture/{capture_event_id}?done=1", status_code=303)

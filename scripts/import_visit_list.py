@@ -29,7 +29,7 @@ load_dotenv()
 
 import openpyxl
 
-from app.db import get_connection
+from app.db import get_connection, release_connection
 
 XLSX = Path(__file__).resolve().parent.parent / "documents" / "Visit Scoop+Exhibition call List Updated (5).xlsx"
 
@@ -223,7 +223,7 @@ def main() -> None:
         print(f"\nCommitted: {len(company_rows)} companies, {len(people_rows)} people, "
               f"{len(relation_rows)} employer relations - all pending review.")
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 if __name__ == "__main__":

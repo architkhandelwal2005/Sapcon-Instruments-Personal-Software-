@@ -7,7 +7,7 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from app.db import get_connection
+from app.db import get_connection, release_connection
 from app.ingestion.pipeline import ingest_new_meeting
 from app.web.helpers import save_and_transcribe
 
@@ -55,6 +55,6 @@ async def create_meeting(
     except Exception as exc:
         return RedirectResponse(f"/meetings/new?error={quote(str(exc)[:200])}", status_code=303)
     finally:
-        conn.close()
+        release_connection(conn)
 
     return RedirectResponse(f"/review/{res.meeting_id}", status_code=303)

@@ -6,7 +6,7 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from app.db import get_connection
+from app.db import get_connection, release_connection
 from app.ingestion.pipeline import append_correction
 from app.minutes.generate import fetch_meeting_minutes_data, generate_readback
 from app.web.helpers import save_and_transcribe, with_overdue_flags
@@ -27,7 +27,7 @@ def view_meeting(
     try:
         data = fetch_meeting_minutes_data(conn, meeting_id)
     finally:
-        conn.close()
+        release_connection(conn)
 
     flash = None
     flash_error = False
@@ -59,7 +59,7 @@ def meeting_readback(meeting_id: str):
     try:
         return generate_readback(conn, meeting_id)
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 @router.post("/meetings/{meeting_id}/correct")
@@ -90,7 +90,7 @@ async def submit_correction(
     except Exception as exc:
         return RedirectResponse(f"/meetings/{meeting_id}?error={quote(str(exc)[:200])}", status_code=303)
     finally:
-        conn.close()
+        release_connection(conn)
 
     redirect_url = f"/meetings/{meeting_id}?corrected=1"
     if ambiguous:

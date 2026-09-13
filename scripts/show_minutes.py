@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app.db import get_connection
+from app.db import get_connection, release_connection
 
 
 def main() -> None:
@@ -24,7 +24,7 @@ def main() -> None:
         if row is None:
             raise SystemExit(f"No meeting found with id {meeting_id!r}")
         print(row[0] or "(minutes not generated yet)")
-    conn.close()
+    release_connection(conn)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app.capture.pipeline import ingest_capture
-from app.db import get_connection
+from app.db import get_connection, release_connection
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
@@ -50,6 +50,6 @@ async def create_capture(
     except Exception as exc:
         return RedirectResponse(f"/captures/new?error={quote(str(exc)[:200])}", status_code=303)
     finally:
-        conn.close()
+        release_connection(conn)
 
     return RedirectResponse(f"/review/capture/{result.capture_event_id}", status_code=303)

@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app.db import get_connection
+from app.db import get_connection, release_connection
 
 # Initials seen on the sample visit-card and diary photos. Extend this list as more
 # photos surface initials not seen yet - re-running only adds what's missing.
@@ -76,7 +76,7 @@ def main() -> None:
         conn.commit()
         print(f"\nCommitted {len(to_create) + (1 if owner_missing else 0)} row(s).")
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 if __name__ == "__main__":

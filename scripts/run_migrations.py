@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.db import get_connection
+from app.db import get_connection, release_connection
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
@@ -43,7 +43,7 @@ def main() -> None:
                 )
             print(f"Applied {path.name}")
 
-    conn.close()
+    release_connection(conn)
     print("Done.")
 
 

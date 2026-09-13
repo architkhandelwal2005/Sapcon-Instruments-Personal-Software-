@@ -21,7 +21,7 @@ from fastapi.responses import PlainTextResponse
 from twilio.request_validator import RequestValidator
 
 from app.capture.pipeline import ingest_capture
-from app.db import get_connection
+from app.db import get_connection, release_connection
 from app.ingestion.pipeline import ingest_new_meeting
 from app.llm import transcribe_audio
 from app.query import ask as run_ask
@@ -82,7 +82,7 @@ def _process_message(*, from_: str, body: str, num_media: int, media_url: Option
             send_whatsapp(from_, "Got your message but couldn't process it - will follow up.")
             raise
     finally:
-        conn.close()
+        release_connection(conn)
 
 
 def _dispatch(conn, from_, body, num_media, media_url, media_type, logged_by) -> None:

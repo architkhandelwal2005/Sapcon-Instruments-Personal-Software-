@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from app.db import get_connection
+from app.db import get_connection, release_connection
 from app.review import pending_capture_count, pending_count
 from app.web.routes import ask, captures, contacts, entities, ingest, leads, meetings, review, whatsapp
 
@@ -47,7 +47,7 @@ def home(request: Request):
             rows = cur.fetchall()
         review_backlog = pending_count(conn) + pending_capture_count(conn)
     finally:
-        conn.close()
+        release_connection(conn)
 
     meetings_list = [
         {

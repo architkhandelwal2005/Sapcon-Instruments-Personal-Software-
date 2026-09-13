@@ -16,7 +16,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from app.db import get_connection
+from app.db import get_connection, release_connection
 from app.web.routes.entities import fetch_entity, fetch_interaction_history
 
 router = APIRouter()
@@ -106,7 +106,7 @@ def leads_page(
             cur.execute("select distinct source from leads where source is not null order by source")
             sources = [r[0] for r in cur.fetchall()]
     finally:
-        conn.close()
+        release_connection(conn)
 
     active = {"status": status or "", "assigned_to": assigned_to or "", "source": source or ""}
     return templates.TemplateResponse(
@@ -129,7 +129,7 @@ def new_lead_form(request: Request, error: Optional[str] = None):
     try:
         employees = _employee_options(conn)
     finally:
-        conn.close()
+        release_connection(conn)
     return templates.TemplateResponse(request, "lead_new.html", {"employees": employees, "error": error})
 
 
@@ -182,7 +182,7 @@ def create_lead(
             (lead_id,) = cur.fetchone()
         conn.commit()
     finally:
-        conn.close()
+        release_connection(conn)
 
     return RedirectResponse(f"/leads/{lead_id}", status_code=303)
 
@@ -213,7 +213,7 @@ def lead_detail(request: Request, lead_id: str, done: Optional[int] = None):
         history = fetch_interaction_history(conn, str(entity_id))
         employees = _employee_options(conn)
     finally:
-        conn.close()
+        release_connection(conn)
 
     lead = {
         "id": lead_id, "entity": entity, "assigned_to": (str(assigned_to) if assigned_to else None),
@@ -258,6 +258,6 @@ def update_lead_status(
             )
         conn.commit()
     finally:
-        conn.close()
+        release_connection(conn)
 
     return RedirectResponse(f"/leads/{lead_id}?done=1", status_code=303)

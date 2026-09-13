@@ -6,7 +6,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from app.db import get_connection
+from app.db import get_connection, release_connection
 from app.review import finalise_meeting_status
 
 router = APIRouter()
@@ -100,7 +100,7 @@ def contacts_page(
         options = _filter_options(conn)
         rows, total, pending = _search(conn, clause, params, page)
     finally:
-        conn.close()
+        release_connection(conn)
 
     active = {"q": q, "type": type or "", "region": region or "", "role": role or "", "source": source or ""}
     prefix = urlencode({k: v for k, v in active.items() if v})
@@ -164,7 +164,7 @@ def bulk_confirm(
             finalise_meeting_status(conn, m)
         conn.commit()
     finally:
-        conn.close()
+        release_connection(conn)
 
     active = {"q": q.strip(), "type": type, "region": region, "role": role, "source": source}
     qs = urlencode({k: v for k, v in active.items() if v})

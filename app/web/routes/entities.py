@@ -4,7 +4,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from app.db import get_connection
+from app.db import get_connection, release_connection
 from app.entity_resolution.review_queue import fetch_flags_for_entity
 from app.graph.entity_view import fetch_entity_connections
 from app.minutes.generate import TaskRow, fetch_meeting_minutes_data
@@ -98,7 +98,7 @@ def view_entity(request: Request, entity_id: str):
         review_flags = fetch_flags_for_entity(conn, entity_id)
         last_meeting = fetch_meeting_minutes_data(conn, history[0]["id"]) if history else None
     finally:
-        conn.close()
+        release_connection(conn)
 
     return templates.TemplateResponse(
         request,
@@ -125,7 +125,7 @@ def view_contour(request: Request, entity_id: str):
         entity = fetch_entity(conn, entity_id)
         connections = fetch_entity_connections(conn, entity_id)
     finally:
-        conn.close()
+        release_connection(conn)
 
     # Jinja's groupby filter requires pre-sorted input. Untagged edges group
     # under "" and render as "untagged".
