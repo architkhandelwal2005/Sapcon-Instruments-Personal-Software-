@@ -24,7 +24,7 @@ repo.
 |---|---|
 | `DATABASE_URL` | same Supabase connection string already in your local `.env` |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | same as local `.env` |
-| `EXTRACTION_PROVIDER` | `anthropic` - **must** be this before any real recording or photo is processed (the free Gemini tier must never see real customer data) |
+| `EXTRACTION_PROVIDER` | `anthropic` - **must** be this before any real recording or photo is processed (the free Gemini tier must never see real customer data). Note: voice-note **transcription** itself always goes through Gemini regardless of this setting - Anthropic's API has no audio input. If full privacy is ever required, transcription needs its own change (a paid Gemini key, or a different audio-capable provider). |
 | `ANTHROPIC_API_KEY` | your Anthropic key |
 | `TWILIO_ACCOUNT_SID` | from the Twilio console |
 | `TWILIO_AUTH_TOKEN` | from the Twilio console |

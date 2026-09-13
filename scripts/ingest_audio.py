@@ -30,7 +30,7 @@ from app.minutes.generate import generate_readback
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Ingest one meeting recording or transcript.")
-    p.add_argument("--audio", help="audio file to transcribe with faster-whisper")
+    p.add_argument("--audio", help="audio file to transcribe with Gemini")
     p.add_argument("--transcript-file", help="plain-text transcript, bypassing transcription")
     p.add_argument("--meeting-date", help="YYYY-MM-DD (new meeting only)")
     p.add_argument("--primary-contact", help="name of the main person met (new meeting only)")
@@ -56,9 +56,12 @@ def _read_transcript(args) -> str:
     if args.transcript_file:
         return Path(args.transcript_file).read_text(encoding="utf-8")
     if args.audio:
-        from app.transcription.whisper_client import transcribe
+        import mimetypes
 
-        return transcribe(args.audio)
+        from app.llm import transcribe_audio
+
+        mime_type = mimetypes.guess_type(args.audio)[0] or "audio/ogg"
+        return transcribe_audio(Path(args.audio).read_bytes(), mime_type)
     raise SystemExit("Pass either --audio or --transcript-file")
 
 

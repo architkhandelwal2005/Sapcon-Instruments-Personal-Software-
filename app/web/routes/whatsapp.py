@@ -23,8 +23,8 @@ from twilio.request_validator import RequestValidator
 from app.capture.pipeline import ingest_capture
 from app.db import get_connection
 from app.ingestion.pipeline import ingest_new_meeting
+from app.llm import transcribe_audio
 from app.query import ask as run_ask
-from app.transcription.whisper_client import transcribe
 from app.whatsapp.client import download_media, send_whatsapp
 from app.whatsapp.reply import ask_reply, capture_reply, meeting_reply
 
@@ -114,7 +114,7 @@ def _handle_audio(conn, from_, media_url, media_type, logged_by, base) -> None:
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(audio_bytes)
         audio_path = tmp.name
-    transcript = transcribe(audio_path)
+    transcript = transcribe_audio(audio_bytes, media_type)
     if not transcript.strip():
         send_whatsapp(from_, "Got the voice note but couldn't make out any speech - try again?")
         return

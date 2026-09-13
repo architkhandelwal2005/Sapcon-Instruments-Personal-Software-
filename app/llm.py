@@ -52,6 +52,36 @@ def complete_json_with_image(system: str, user: str, image_bytes: bytes, mime_ty
     )
 
 
+def transcribe_audio(audio_bytes: bytes, mime_type: str) -> str:
+    """Transcribe a voice note to text via Gemini's native audio understanding.
+
+    Always Gemini, regardless of EXTRACTION_PROVIDER - Anthropic's API has no
+    audio input, so there is no 'anthropic' path here the way there is for
+    complete_json/complete_json_with_image. A real voice note is exactly as
+    sensitive as a real transcript; if EXTRACTION_PROVIDER is later set to
+    'anthropic' for that reason, transcription itself still touches Gemini
+    until this function is pointed at a paid Gemini key or another audio-
+    capable provider."""
+    return _with_retries(lambda: _raw_transcribe(audio_bytes, mime_type))
+
+
+def _raw_transcribe(audio_bytes: bytes, mime_type: str) -> str:
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    resp = client.models.generate_content(
+        model=_GEMINI_MODEL,
+        contents=[
+            types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+            "Transcribe this audio verbatim, in whatever language(s) are spoken. "
+            "Return only the transcript text - no commentary, no timestamps, no speaker labels.",
+        ],
+        config={"temperature": 0},
+    )
+    return (resp.text or "").strip()
+
+
 def _with_retries(call):
     last_exc: Exception | None = None
     for attempt in range(_RETRIES):
