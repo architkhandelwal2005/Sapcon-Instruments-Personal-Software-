@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.db import get_connection
 from app.review import pending_capture_count, pending_count
-from app.web.routes import ask, captures, contacts, entities, ingest, leads, meetings, review
+from app.web.routes import ask, captures, contacts, entities, ingest, leads, meetings, review, whatsapp
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -28,6 +28,7 @@ app.include_router(ask.router)
 app.include_router(contacts.router)
 app.include_router(leads.router)
 app.include_router(captures.router)
+app.include_router(whatsapp.router)
 
 
 @app.get("/", response_class=HTMLResponse)
