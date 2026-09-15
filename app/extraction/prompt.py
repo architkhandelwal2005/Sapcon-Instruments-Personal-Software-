@@ -30,9 +30,13 @@ entity isn't present and even if the fact is tentative or hasn't happened yet. "
 speaker is relaying an unverified claim from someone not present and not personally involved. \
 provenance is NEVER about how certain the fact is - only about the source.
 
-3. TASKS - things the speaker said he needs to do. For each: what needs doing, the entity it \
-relates to (if any), and relative_due as an amount + unit ("day"/"week"/"month") if a timeframe was \
-mentioned - do NOT compute a date, just the amount and unit. Omit relative_due if no timeframe.
+3. TASKS - things that need doing, said by the speaker himself OR assigned by him to someone else \
+("ask Priya to follow up with Ramesh", "Vikas should call them next week"). For each: what needs \
+doing, the entity it relates to (if any), assignee (the employee's name, ONLY if the speaker \
+explicitly named a person to do it - never guess or default to the speaker himself), and \
+relative_due as an amount + unit ("day"/"week"/"month") if a timeframe was mentioned - do NOT \
+compute a date, just the amount and unit. Omit relative_due if no timeframe, omit assignee if no \
+one was named.
 
 4. SUMMARY - a short, clean prose recap of the meeting: who was met, what was discussed, what \
 matters. This is read by a human before the next meeting.

@@ -42,6 +42,7 @@ class ExtractedConnection(BaseModel):
 class ExtractedTask(BaseModel):
     description: str
     target_entity: Optional[str] = None
+    assignee: Optional[str] = None    # employee name, only if the speaker explicitly named one
     relative_due: Optional[RelativeDue] = None
     confidence: Confidence
     source_quote: Optional[str] = None   # filled by the verification pass
@@ -102,6 +103,7 @@ def build_tool_schema() -> dict:
                         "properties": {
                             "description": {"type": "string"},
                             "target_entity": {"type": "string"},
+                            "assignee": {"type": "string", "description": "employee name, only if explicitly named"},
                             "relative_due": {
                                 "type": "object",
                                 "properties": {

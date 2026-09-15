@@ -47,6 +47,8 @@ def decide_match(name: str, entity_type: str, context: str, candidates: list[Can
         f"EXISTING CANDIDATES:\n{cand_lines}"
     )
     raw = complete_json(PROMPT, payload, max_tokens=512)
+    if isinstance(raw, list):
+        raw = raw[0] if raw else {}
     decision = raw.get("decision", "uncertain")
     match_id = raw.get("match_id")
     if decision == "match" and match_id not in {c.id for c in candidates}:

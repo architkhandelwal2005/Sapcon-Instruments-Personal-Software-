@@ -13,6 +13,7 @@ from typing import Callable, Optional
 
 import psycopg
 
+from app.entity_resolution.employees import match_employee
 from app.entity_resolution.resolve import ResolutionResult, resolve_entity
 from app.extraction.extractor import extract
 from app.extraction.resolve_dates import resolve_due_date
@@ -91,12 +92,13 @@ def _write_meeting_body(conn, result, resolved, on_resolved, meeting_id, meeting
     with conn.cursor() as cur:
         for t in result.tasks:
             rel_id = _resolve_ref(conn, resolved, t.target_entity, transcript, on_resolved) if t.target_entity else None
+            assigned_to = match_employee(conn, t.assignee)
             due = resolve_due_date(meeting_date, t.relative_due)
             status = _row_status(t.confidence)
             cur.execute(
-                "insert into tasks (description, related_entity_id, meeting_id, due_date, confidence, "
-                "source_quote, review_status) values (%s,%s,%s,%s,%s,%s,%s)",
-                (t.description, rel_id, meeting_id, due, t.confidence, t.source_quote, status),
+                "insert into tasks (description, related_entity_id, assigned_to, meeting_id, due_date, "
+                "confidence, source_quote, review_status) values (%s,%s,%s,%s,%s,%s,%s,%s)",
+                (t.description, rel_id, assigned_to, meeting_id, due, t.confidence, t.source_quote, status),
             )
             task_count += 1
             auto, pending = (auto + 1, pending) if status == "auto_confirmed" else (auto, pending + 1)

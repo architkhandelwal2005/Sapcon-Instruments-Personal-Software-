@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Tasks - Sapcon CRM{% endblock %}
+{% block content %}
+
+<h1>Tasks</h1>
+
+<form class="filter-form" method="get" action="/tasks">
+  <select name="status">
+    <option value="open"{% if active.status == "open" %} selected{% endif %}>Open</option>
+    <option value="done"{% if active.status == "done" %} selected{% endif %}>Done</option>
+    <option value=""{% if active.status == "" %} selected{% endif %}>Any status</option>
+  </select>
+  <select name="assigned_to">
+    <option value="">Anyone</option>
+    {% for e in employees %}
+      <option value="{{ e.id }}"{% if active.assigned_to == e.id %} selected{% endif %}>{{ e.canonical_name }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Filter</button>
+  <a class="entity-link" href="/tasks">Clear</a>
+</form>
+
+{% if rows %}
+  <div class="card">
+    <table class="contact-table">
+      <thead>
+        <tr><th>Task</th><th>About</th><th>Assigned</th><th>Due</th><th>Status</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for t in rows %}
+          <tr>
+            <td>
+              {{ t.description }}
+              {% if t.review_status == "pending" %}<span class="badge badge-pending">unconfirmed</span>{% endif %}
+            </td>
+            <td>{% if t.related_entity_id %}<a class="entity-link" href="/entities/{{ t.related_entity_id }}">{{ t.related_entity_name }}</a>{% else %}&mdash;{% endif %}</td>
+            <td>{{ t.assigned_name or "unassigned" }}</td>
+            <td>{{ t.due_date or "" }} {% if t.overdue %}<span class="badge badge-pending">overdue</span>{% endif %}</td>
+            <td><span class="badge {% if t.status == 'done' %}badge-direct{% else %}badge-tag{% endif %}">{{ t.status }}</span></td>
+            <td>
+              <form method="post" action="/tasks/{{ t.id }}/status">
+                <input type="hidden" name="back" value="/tasks?status={{ active.status }}&assigned_to={{ active.assigned_to }}">
+                {% if t.status == "done" %}
+                  <input type="hidden" name="status" value="open">
+                  <button type="submit">Reopen</button>
+                {% else %}
+                  <input type="hidden" name="status" value="done">
+                  <button type="submit">Mark done</button>
+                {% endif %}
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <p class="empty">No tasks match.</p>
+{% endif %}
+
+{% endblock %}

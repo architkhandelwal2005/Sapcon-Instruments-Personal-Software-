@@ -104,7 +104,7 @@ def _enrich(conn, entity_id: str, attrs: dict) -> list[str]:
             cur.execute(f"update entities set {', '.join(sets)} where id = %s", params)
         if conflicts:
             cur.execute(
-                "update entities set notes = concat_ws(chr(10), notes, %s) where id = %s",
+                "update entities set notes = concat_ws(chr(10), notes, %s::text) where id = %s",
                 (chr(10).join(conflicts), entity_id),
             )
     return conflicts
