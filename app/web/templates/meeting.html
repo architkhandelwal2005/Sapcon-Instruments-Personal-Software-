@@ -7,10 +7,16 @@
 {% endif %}
 
 <h1>
-  {% if data.primary_contact_id %}<a class="entity-link" href="/entities/{{ data.primary_contact_id }}">{{ data.primary_contact_name }}</a>{% else %}Meeting{% endif %}
+  {% if data.primary_contact_id %}<a class="entity-link" href="/entities/{{ data.primary_contact_id }}">{{ data.primary_contact_name }}</a>{% elif data.kind == "internal" %}Internal meeting{% else %}Meeting{% endif %}
 </h1>
 <div class="meta">
-  <div>{{ data.meeting_date }}{% if data.location %} &middot; {{ data.location }}{% endif %}</div>
+  <div>
+    {{ data.meeting_date }}{% if data.location %} &middot; {{ data.location }}{% endif %}
+    <span class="badge badge-tag">{{ "internal" if data.kind == "internal" else "field visit" }}</span>
+  </div>
+  {% if data.attendees %}
+    <div>Attended: {% for a in data.attendees %}{{ a.name }}{% if not a.employee_id %} (not on roster){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</div>
+  {% endif %}
 </div>
 
 {% if data.review_status == "pending" %}
@@ -22,6 +28,30 @@
   <div class="card"><p>{{ data.summary }}</p></div>
 {% endif %}
 
+{% if data.decisions or data.kind == "internal" %}
+<h2>Decisions</h2>
+<div class="card">
+  {% if data.decisions %}
+    <ul class="relation-list">
+      {% for dec in data.decisions %}
+        <li>
+          <div>
+            {{ dec.description }}
+            {% if dec.review_status != "auto_confirmed" and dec.review_status != "confirmed" %}
+              <span class="badge badge-pending">{{ dec.review_status }} &middot; {{ dec.confidence }}</span>
+            {% endif %}
+          </div>
+          {% if dec.source_quote %}<div class="quote">&ldquo;{{ dec.source_quote }}&rdquo;</div>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">No decisions recorded.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if data.connections or data.kind != "internal" %}
 <h2>Connections</h2>
 <div class="card">
   {% if data.connections %}
@@ -48,6 +78,7 @@
     <p class="empty">Nothing extracted yet.</p>
   {% endif %}
 </div>
+{% endif %}
 
 <h2>Tasks</h2>
 <div class="card">
@@ -61,6 +92,9 @@
           {% endif %}
           {% if t.related_entity_name %}
             <div class="task-ref">re: <a class="entity-link" href="/entities/{{ t.related_entity_id }}">{{ t.related_entity_name }}</a></div>
+          {% endif %}
+          {% if t.assignees %}
+            <div class="task-ref">owner: {% for a in t.assignees %}{{ a.name }}{% if not a.employee_id %} (not on roster){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</div>
           {% endif %}
           <div class="task-due{% if t.overdue %} task-overdue{% endif %}">
             {% if t.due_date %}

@@ -15,6 +15,42 @@ router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
 
+@router.get("/meetings", response_class=HTMLResponse)
+def meetings_log(request: Request, kind: Optional[str] = None):
+    """Every meeting, newest first - customer field visits and internal office
+    meetings side by side, filterable by kind."""
+    where, params = "", {}
+    if kind in ("field_visit", "internal"):
+        where, params = "where m.kind = %(kind)s", {"kind": kind}
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                select m.id, m.meeting_date, m.kind, pc.canonical_name, m.summary, m.review_status,
+                       (select count(*) from decisions d where d.meeting_id = m.id and d.review_status <> 'rejected'),
+                       (select count(*) from tasks t where t.meeting_id = m.id
+                          and t.review_status <> 'rejected' and t.status = 'open')
+                from meetings m
+                left join entities pc on pc.id = m.primary_contact_id
+                {where}
+                order by m.meeting_date desc, m.created_at desc
+                limit 300
+                """,
+                params,
+            )
+            rows = [
+                {
+                    "id": str(mid), "meeting_date": mdate, "kind": mkind, "primary_contact_name": pc,
+                    "summary": summary, "review_status": rs, "decision_count": dc, "open_tasks": ot,
+                }
+                for mid, mdate, mkind, pc, summary, rs, dc, ot in cur.fetchall()
+            ]
+    finally:
+        release_connection(conn)
+    return templates.TemplateResponse(request, "meetings_log.html", {"rows": rows, "active_kind": kind or ""})
+
+
 @router.get("/meetings/{meeting_id}", response_class=HTMLResponse)
 def view_meeting(
     request: Request,

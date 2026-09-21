@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Meetings - Sapcon CRM{% endblock %}
+{% block content %}
+
+<h1>Meetings</h1>
+<p class="meta"><a class="entity-link" href="/meetings/new">+ Log a meeting</a></p>
+
+<form class="filter-form" method="get" action="/meetings">
+  <select name="kind">
+    <option value=""{% if not active_kind %} selected{% endif %}>All meetings</option>
+    <option value="internal"{% if active_kind == "internal" %} selected{% endif %}>Internal (office)</option>
+    <option value="field_visit"{% if active_kind == "field_visit" %} selected{% endif %}>Field visits (customers)</option>
+  </select>
+  <button type="submit">Filter</button>
+</form>
+
+{% if rows %}
+  <div class="card">
+    <table class="contact-table">
+      <thead>
+        <tr><th>Date</th><th>Meeting</th><th>Decisions</th><th>Open tasks</th></tr>
+      </thead>
+      <tbody>
+        {% for m in rows %}
+          <tr>
+            <td>{{ m.meeting_date }}</td>
+            <td>
+              <a class="entity-link" href="/meetings/{{ m.id }}">{{ m.primary_contact_name or ("Internal meeting" if m.kind == "internal" else "Meeting") }}</a>
+              <span class="badge badge-tag">{{ "internal" if m.kind == "internal" else "field visit" }}</span>
+              {% if m.review_status == "pending" %}<a class="badge badge-pending" href="/review/{{ m.id }}">needs review</a>{% endif %}
+              {% if m.summary %}<div class="meta">{{ m.summary[:180] }}{% if m.summary|length > 180 %}&hellip;{% endif %}</div>{% endif %}
+            </td>
+            <td>{{ m.decision_count or "" }}</td>
+            <td>{% if m.open_tasks %}<a class="entity-link" href="/tasks">{{ m.open_tasks }}</a>{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <p class="empty">No meetings yet.</p>
+{% endif %}
+
+{% endblock %}

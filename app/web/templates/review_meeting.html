@@ -3,7 +3,7 @@
 {% block main_class %}wide{% endblock %}
 {% block content %}
 
-<h1>Review - {{ data.primary_contact_name or "meeting" }}</h1>
+<h1>Review - {{ data.primary_contact_name or ("internal meeting" if data.kind == "internal" else "meeting") }}</h1>
 <div class="meta"><div>{{ data.meeting_date }}{% if data.location %} &middot; {{ data.location }}{% endif %}</div></div>
 
 {% if done and data.review_status == "clear" %}
@@ -42,6 +42,35 @@
             <input type="hidden" name="item_id" value="{{ e.entity_id }}">
             <button name="decision" value="confirm" class="btn-confirm">Confirm</button>
             <button name="decision" value="reject" class="btn-reject">Reject</button>
+          </form>
+        </div>
+      {% endfor %}
+    {% endif %}
+
+    {% if data.decisions %}
+      <h2>Decisions</h2>
+      {% for dec in data.decisions %}
+        {% set settled = dec.review_status in ("confirmed",) %}
+        <div class="review-item{% if settled %} settled{% endif %}">
+          <div>
+            {{ dec.description }}
+            <span class="badge {% if dec.review_status in ('confirmed','auto_confirmed') %}badge-direct{% else %}badge-pending{% endif %}">{{ dec.review_status }}{% if dec.confidence %} &middot; {{ dec.confidence }}{% endif %}</span>
+          </div>
+          {% if dec.source_quote %}
+            <div class="quote">&ldquo;{{ dec.source_quote }}&rdquo;</div>
+          {% else %}
+            <div class="quote missing">No supporting sentence found in the transcript - check carefully.</div>
+          {% endif %}
+          <form class="review-actions" method="post" action="/review/{{ data.meeting_id }}/item">
+            <input type="hidden" name="kind" value="decision">
+            <input type="hidden" name="item_id" value="{{ dec.decision_id }}">
+            {% if not settled %}<button name="decision" value="confirm" class="btn-confirm">Confirm</button>{% endif %}
+            <button name="decision" value="reject" class="btn-reject">Reject</button>
+            <details class="review-edit">
+              <summary>Edit</summary>
+              <textarea name="description">{{ dec.description }}</textarea>
+              <button name="decision" value="confirm" class="btn-confirm">Save &amp; confirm</button>
+            </details>
           </form>
         </div>
       {% endfor %}
@@ -94,6 +123,7 @@
           <div class="meta">
             {% if t.due_date %}due {{ t.due_date }}{% else %}no due date{% endif %}
             {% if t.related_entity_name %} &middot; re: {{ t.related_entity_name }}{% endif %}
+            {% if t.assignees %} &middot; owner: {% for a in t.assignees %}{{ a.name }}{% if not a.employee_id %} (not on roster){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
           </div>
           {% if t.source_quote %}<div class="quote">&ldquo;{{ t.source_quote }}&rdquo;</div>{% endif %}
           <form class="review-actions" method="post" action="/review/{{ data.meeting_id }}/item">
@@ -114,7 +144,7 @@
       <p class="empty">No tasks.</p>
     {% endif %}
 
-    {% if rejected.relations or rejected.tasks %}
+    {% if rejected.relations or rejected.tasks or rejected.decisions %}
       <h2>Rejected</h2>
       <p class="meta">Kept in case a reject was a mistake. Restore puts the item back as confirmed.</p>
       {% for r in rejected.relations %}
@@ -123,6 +153,16 @@
           <form class="review-actions" method="post" action="/review/{{ data.meeting_id }}/item">
             <input type="hidden" name="kind" value="relation">
             <input type="hidden" name="item_id" value="{{ r.id }}">
+            <button name="decision" value="confirm" class="btn-confirm">Restore</button>
+          </form>
+        </div>
+      {% endfor %}
+      {% for dec in rejected.decisions %}
+        <div class="review-item settled">
+          <div class="struck">{{ dec.description }}</div>
+          <form class="review-actions" method="post" action="/review/{{ data.meeting_id }}/item">
+            <input type="hidden" name="kind" value="decision">
+            <input type="hidden" name="item_id" value="{{ dec.id }}">
             <button name="decision" value="confirm" class="btn-confirm">Restore</button>
           </form>
         </div>

@@ -12,6 +12,7 @@
   </select>
   <select name="assigned_to">
     <option value="">Anyone</option>
+    <option value="none"{% if active.assigned_to == "none" %} selected{% endif %}>Nobody (unassigned)</option>
     {% for e in employees %}
       <option value="{{ e.id }}"{% if active.assigned_to == e.id %} selected{% endif %}>{{ e.canonical_name }}</option>
     {% endfor %}
@@ -32,9 +33,14 @@
             <td>
               {{ t.description }}
               {% if t.review_status == "pending" %}<span class="badge badge-pending">unconfirmed</span>{% endif %}
+              {% if t.meeting_id %}<div class="meta"><a class="entity-link" href="/meetings/{{ t.meeting_id }}">from meeting</a></div>{% endif %}
             </td>
             <td>{% if t.related_entity_id %}<a class="entity-link" href="/entities/{{ t.related_entity_id }}">{{ t.related_entity_name }}</a>{% else %}&mdash;{% endif %}</td>
-            <td>{{ t.assigned_name or "unassigned" }}</td>
+            <td>
+              {% for a in t.assignees %}
+                <div>{{ a.name }}{% if not a.employee_id %} <span class="badge badge-pending">not on roster</span>{% endif %}</div>
+              {% else %}unassigned{% endfor %}
+            </td>
             <td>{{ t.due_date or "" }} {% if t.overdue %}<span class="badge badge-pending">overdue</span>{% endif %}</td>
             <td><span class="badge {% if t.status == 'done' %}badge-direct{% else %}badge-tag{% endif %}">{{ t.status }}</span></td>
             <td>

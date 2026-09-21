@@ -13,7 +13,7 @@ from typing import Callable, Optional
 
 import psycopg
 
-from app.entity_resolution.employees import match_employee
+from app.entity_resolution.employees import employee_roster, match_employee
 from app.entity_resolution.resolve import ResolutionResult, resolve_entity
 from app.extraction.extractor import extract
 from app.extraction.resolve_dates import resolve_due_date
@@ -30,6 +30,8 @@ class IngestResult:
     auto_confirmed: int
     pending: int
     resolutions: list[ResolutionResult] = field(default_factory=list)
+    decision_count: int = 0
+    kind: str = "field_visit"
 
 
 OnResolved = Optional[Callable[[str, ResolutionResult], None]]
@@ -66,9 +68,34 @@ def _resolve_ref(conn, resolved: dict, name: str, transcript: str, on_resolved: 
     return r.entity_id
 
 
-def _write_meeting_body(conn, result, resolved, on_resolved, meeting_id, meeting_date, transcript) -> tuple[int, int, int, int]:
+def _write_attendees(conn, meeting_id, names: list[str]) -> None:
+    """Each attendee kept as heard; linked to an employee only on a confident
+    match. A correction re-listing someone already recorded adds nothing."""
+    with conn.cursor() as cur:
+        cur.execute("select lower(name), employee_id from meeting_attendees where meeting_id = %s", (meeting_id,))
+        existing = cur.fetchall()
+        seen_names = {n for n, _ in existing}
+        seen_ids = {e for _, e in existing if e}
+        for name in names:
+            name = name.strip()
+            if not name or name.lower() in seen_names:
+                continue
+            emp = match_employee(conn, name)
+            if emp and emp in seen_ids:
+                continue
+            cur.execute(
+                "insert into meeting_attendees (meeting_id, name, employee_id) values (%s,%s,%s)",
+                (meeting_id, name, emp),
+            )
+            seen_names.add(name.lower())
+            if emp:
+                seen_ids.add(emp)
+
+
+def _write_meeting_body(conn, result, resolved, on_resolved, meeting_id, meeting_date, transcript) -> tuple[int, int, int, int, int]:
     conn_count = auto = pending = 0
     seen: set = set()
+    _write_attendees(conn, meeting_id, result.attendees)
     with conn.cursor() as cur:
         for c in result.connections:
             sid = _resolve_ref(conn, resolved, c.source, transcript, on_resolved)
@@ -88,22 +115,39 @@ def _write_meeting_body(conn, result, resolved, on_resolved, meeting_id, meeting
             conn_count += 1
             auto, pending = (auto + 1, pending) if status == "auto_confirmed" else (auto, pending + 1)
 
+    decision_count = 0
+    with conn.cursor() as cur:
+        for d in result.decisions:
+            status = _row_status(d.confidence)
+            cur.execute(
+                "insert into decisions (meeting_id, description, source_quote, confidence, review_status) "
+                "values (%s,%s,%s,%s,%s)",
+                (meeting_id, d.description, d.source_quote, d.confidence, status),
+            )
+            decision_count += 1
+            auto, pending = (auto + 1, pending) if status == "auto_confirmed" else (auto, pending + 1)
+
     task_count = 0
     with conn.cursor() as cur:
         for t in result.tasks:
             rel_id = _resolve_ref(conn, resolved, t.target_entity, transcript, on_resolved) if t.target_entity else None
-            assigned_to = match_employee(conn, t.assignee)
             due = resolve_due_date(meeting_date, t.relative_due)
             status = _row_status(t.confidence)
             cur.execute(
-                "insert into tasks (description, related_entity_id, assigned_to, meeting_id, due_date, "
-                "confidence, source_quote, review_status) values (%s,%s,%s,%s,%s,%s,%s,%s)",
-                (t.description, rel_id, assigned_to, meeting_id, due, t.confidence, t.source_quote, status),
+                "insert into tasks (description, related_entity_id, meeting_id, due_date, "
+                "confidence, source_quote, review_status) values (%s,%s,%s,%s,%s,%s,%s) returning id",
+                (t.description, rel_id, meeting_id, due, t.confidence, t.source_quote, status),
             )
+            (task_id,) = cur.fetchone()
+            for name in dict.fromkeys(n.strip() for n in t.assignees if n.strip()):
+                cur.execute(
+                    "insert into task_assignees (task_id, name, employee_id) values (%s,%s,%s)",
+                    (task_id, name, match_employee(conn, name)),
+                )
             task_count += 1
             auto, pending = (auto + 1, pending) if status == "auto_confirmed" else (auto, pending + 1)
 
-    return conn_count, task_count, auto, pending
+    return conn_count, task_count, decision_count, auto, pending
 
 
 def ingest_new_meeting(
@@ -120,7 +164,7 @@ def ingest_new_meeting(
     boy, or a marketing employee) - null when the concept doesn't apply (e.g. CLI
     testing). Lets a lead's activity history be filtered to one employee's calls."""
     try:
-        result = extract(transcript)
+        result = extract(transcript, employee_roster(conn))
         resolved = _resolve_entities(conn, result.entities, transcript, on_resolved)
 
         primary_id = None
@@ -129,18 +173,21 @@ def ingest_new_meeting(
 
         with conn.cursor() as cur:
             cur.execute(
-                "insert into meetings (meeting_date, primary_contact_id, location, raw_transcript, audio_url, summary, logged_by) "
-                "values (%s,%s,%s,%s,%s,%s,%s) returning id",
-                (meeting_date, primary_id, location, transcript, audio_path, result.summary, logged_by),
+                "insert into meetings (meeting_date, primary_contact_id, location, raw_transcript, audio_url, "
+                "summary, logged_by, kind) values (%s,%s,%s,%s,%s,%s,%s,%s) returning id",
+                (meeting_date, primary_id, location, transcript, audio_path, result.summary, logged_by, result.kind),
             )
             (meeting_id,) = cur.fetchone()
 
-        cc, tc, auto, pending = _write_meeting_body(
+        cc, tc, dc, auto, pending = _write_meeting_body(
             conn, result, resolved, on_resolved, meeting_id, meeting_date, transcript
         )
         finalise_meeting_status(conn, meeting_id)
         conn.commit()
-        return IngestResult(str(meeting_id), len(resolved), cc, tc, auto, pending, list(resolved.values()))
+        return IngestResult(
+            str(meeting_id), len(resolved), cc, tc, auto, pending, list(resolved.values()),
+            decision_count=dc, kind=result.kind,
+        )
     except Exception as exc:
         conn.rollback()
         record_failure(conn, meeting_date, audio_path, transcript, exc)
@@ -167,14 +214,17 @@ def append_correction(
                 (f"\n\n--- Correction (appended {date.today().isoformat()}) ---\n\n{transcript}", meeting_id),
             )
 
-        result = extract(transcript)
+        result = extract(transcript, employee_roster(conn))
         resolved = _resolve_entities(conn, result.entities, transcript, on_resolved)
-        cc, tc, auto, pending = _write_meeting_body(
+        cc, tc, dc, auto, pending = _write_meeting_body(
             conn, result, resolved, on_resolved, meeting_id, meeting_date, transcript
         )
         finalise_meeting_status(conn, meeting_id)
         conn.commit()
-        return IngestResult(str(meeting_id), len(resolved), cc, tc, auto, pending, list(resolved.values()))
+        return IngestResult(
+            str(meeting_id), len(resolved), cc, tc, auto, pending, list(resolved.values()),
+            decision_count=dc,
+        )
     except Exception as exc:
         conn.rollback()
         record_failure(conn, meeting_date or date.today(), audio_path, transcript, exc)

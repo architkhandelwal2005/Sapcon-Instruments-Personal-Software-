@@ -33,6 +33,7 @@ def with_overdue_flags(tasks) -> list[dict]:
                 "confidence": getattr(t, "confidence", None),
                 "source_quote": getattr(t, "source_quote", None),
                 "task_id": getattr(t, "task_id", ""),
+                "assignees": getattr(t, "assignees", []),
             }
         )
     return out

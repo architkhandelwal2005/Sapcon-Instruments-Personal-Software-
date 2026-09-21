@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app.db import get_connection, release_connection
+from app.entity_resolution.employees import employee_roster
 from app.extraction.extractor import extract
 from app.extraction.resolve_dates import resolve_due_date
 from app.ingestion.pipeline import append_correction, ingest_new_meeting
@@ -71,11 +72,19 @@ def main() -> None:
 
     if args.dry_run:
         meeting_date = datetime.strptime(args.meeting_date, "%Y-%m-%d").date() if args.meeting_date else None
-        result = extract(transcript)
+        conn = get_connection()
+        try:
+            roster = employee_roster(conn)
+        finally:
+            release_connection(conn)
+        result = extract(transcript, roster)
         out = {
+            "kind": result.kind,
             "summary": result.summary,
+            "attendees": result.attendees,
             "entities": [e.model_dump() for e in result.entities],
             "connections": [c.model_dump() for c in result.connections],
+            "decisions": [d.model_dump() for d in result.decisions],
             "tasks": [
                 {
                     **t.model_dump(exclude={"relative_due"}),

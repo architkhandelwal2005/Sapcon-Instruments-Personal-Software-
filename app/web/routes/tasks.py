@@ -1,7 +1,8 @@
-"""Task dashboard: what's left to do, and who it's assigned to. A task's
-assignee comes from the voice-note extraction naming an employee explicitly
-(app.entity_resolution.employees.match_employee) - never guessed. Status is
-just open/done, changed only by a human clicking here, same as leads.
+"""Task dashboard: what's left to do, and who owns it. Owners come from the
+voice-note extraction naming staff explicitly (task_assignees, matched by
+app.entity_resolution.employees.match_employee) - never guessed; a name that
+didn't match the roster is still shown as heard. Status is just open/done,
+changed only by a human clicking here, same as leads.
 """
 
 from datetime import date
@@ -13,6 +14,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app.db import get_connection, release_connection
+from app.minutes.generate import fetch_task_assignees
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
@@ -32,8 +34,10 @@ def _predicate(*, status, assigned_to) -> tuple[str, dict]:
     if status:
         where.append("t.status = %(status)s")
         params["status"] = status
-    if assigned_to:
-        where.append("t.assigned_to = %(assigned_to)s")
+    if assigned_to == "none":
+        where.append("not exists (select 1 from task_assignees ta where ta.task_id = t.id)")
+    elif assigned_to:
+        where.append("exists (select 1 from task_assignees ta where ta.task_id = t.id and ta.employee_id = %(assigned_to)s)")
         params["assigned_to"] = assigned_to
     return " and ".join(where), params
 
@@ -51,27 +55,28 @@ def tasks_page(
             cur.execute(
                 f"""
                 select t.id, t.description, t.related_entity_id, re.canonical_name,
-                       t.assigned_to, ae.canonical_name, t.due_date, t.status,
-                       t.review_status, t.confidence
+                       t.due_date, t.status, t.review_status, t.confidence, t.meeting_id
                 from tasks t
                 left join entities re on re.id = t.related_entity_id
-                left join entities ae on ae.id = t.assigned_to
                 where {clause}
                 order by t.due_date nulls last
                 """,
                 params,
             )
-            today = date.today()
-            rows = []
-            for tid, desc, reid, rename, aid, aname, due, tstatus, review_status, confidence in cur.fetchall():
-                rows.append({
-                    "id": str(tid), "description": desc,
-                    "related_entity_id": str(reid) if reid else None, "related_entity_name": rename,
-                    "assigned_to": str(aid) if aid else None, "assigned_name": aname,
-                    "due_date": due, "status": tstatus, "review_status": review_status,
-                    "confidence": confidence,
-                    "overdue": bool(due and due < today and tstatus != "done"),
-                })
+            found = cur.fetchall()
+        owners = fetch_task_assignees(conn, [str(r[0]) for r in found])
+        today = date.today()
+        rows = [
+            {
+                "id": str(tid), "description": desc,
+                "related_entity_id": str(reid) if reid else None, "related_entity_name": rename,
+                "assignees": owners.get(str(tid), []),
+                "due_date": due, "status": tstatus, "review_status": review_status,
+                "confidence": confidence, "meeting_id": str(mid) if mid else None,
+                "overdue": bool(due and due < today and tstatus != "done"),
+            }
+            for tid, desc, reid, rename, due, tstatus, review_status, confidence, mid in found
+        ]
         employees = _employee_options(conn)
     finally:
         release_connection(conn)

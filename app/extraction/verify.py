@@ -40,8 +40,13 @@ def _build_claims(result: ExtractionResult) -> list[tuple[str, str]]:
                 claims.append((f"entity_attr:{i}:{attr}", f'"{e.name}" has {attr}: {val}'))
     for i, c in enumerate(result.connections):
         claims.append((f"connection:{i}", c.description))
+    for i, d in enumerate(result.decisions):
+        claims.append((f"decision:{i}", d.description))
     for i, t in enumerate(result.tasks):
-        claims.append((f"task:{i}", t.description))
+        # The owners are part of the claim - a task pinned on the wrong person is
+        # as wrong as a task that was never said.
+        owners = f" (to be done by {', '.join(t.assignees)})" if t.assignees else ""
+        claims.append((f"task:{i}", t.description + owners))
     return claims
 
 
@@ -69,8 +74,10 @@ def _call(transcript: str, claims: list[str]) -> list[ClaimCheck]:
 
 def verify(transcript: str, result: ExtractionResult) -> ExtractionResult:
     """Attach source_quotes, drop unsupported entity attributes, and force
-    unsupported connections/tasks/entities to low confidence."""
+    unsupported connections/decisions/tasks/entities to low confidence."""
     claims = _build_claims(result)
+    if not claims:
+        return result
     checks = _call(transcript, [c[1] for c in claims])
 
     for (pointer, _), check in zip(claims, checks):
@@ -87,6 +94,10 @@ def verify(transcript: str, result: ExtractionResult) -> ExtractionResult:
             result.connections[idx].source_quote = check.quote
             if not check.supported:
                 result.connections[idx].confidence = "low"
+        elif kind == "decision":
+            result.decisions[idx].source_quote = check.quote
+            if not check.supported:
+                result.decisions[idx].confidence = "low"
         elif kind == "task":
             result.tasks[idx].source_quote = check.quote
             if not check.supported:

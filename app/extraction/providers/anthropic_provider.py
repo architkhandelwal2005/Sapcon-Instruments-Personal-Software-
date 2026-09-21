@@ -6,7 +6,7 @@ from app.extraction.schema import TOOL_NAME, ExtractionResult, build_tool_schema
 MODEL = "claude-haiku-4-5-20251001"
 
 
-def extract(transcript: str) -> ExtractionResult:
+def extract(transcript: str, roster: list[str]) -> ExtractionResult:
     client = anthropic.Anthropic()
     tool = build_tool_schema()
 
@@ -14,7 +14,7 @@ def extract(transcript: str) -> ExtractionResult:
         model=MODEL,
         max_tokens=4096,
         temperature=0,
-        system=build_system_prompt(),
+        system=build_system_prompt(roster),
         tools=[tool],
         tool_choice={"type": "tool", "name": TOOL_NAME},
         messages=[{"role": "user", "content": transcript}],

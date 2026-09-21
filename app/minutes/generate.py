@@ -31,6 +31,16 @@ class TaskRow:
     review_status: str
     source_quote: Optional[str]
     task_id: str
+    assignees: list[dict]             # {name, employee_id} - employee_id None when unmatched
+
+
+@dataclass
+class DecisionRow:
+    description: str
+    confidence: Optional[str]
+    review_status: str
+    source_quote: Optional[str]
+    decision_id: str
 
 
 @dataclass
@@ -46,6 +56,30 @@ class MeetingMinutesData:
     primary_contact_id: Optional[str]
     connections: list[ConnectionRow]
     tasks: list[TaskRow]
+    kind: str
+    attendees: list[dict]             # {name, employee_id}
+    decisions: list[DecisionRow]
+
+
+def fetch_task_assignees(conn: psycopg.Connection, task_ids: list[str]) -> dict[str, list[dict]]:
+    """task_id -> owners, showing the roster name when matched, else the name as heard."""
+    if not task_ids:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select ta.task_id, coalesce(e.canonical_name, ta.name), ta.employee_id
+            from task_assignees ta
+            left join entities e on e.id = ta.employee_id
+            where ta.task_id = any(%s::uuid[])
+            order by 2
+            """,
+            (task_ids,),
+        )
+        out: dict[str, list[dict]] = {}
+        for tid, name, eid in cur.fetchall():
+            out.setdefault(str(tid), []).append({"name": name, "employee_id": (str(eid) if eid else None)})
+    return out
 
 
 def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> MeetingMinutesData:
@@ -55,7 +89,7 @@ def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> Mee
         cur.execute(
             """
             select m.meeting_date, m.location, m.audio_url, m.raw_transcript, m.summary, m.review_status,
-                   pc.canonical_name, pc.id
+                   pc.canonical_name, pc.id, m.kind
             from meetings m
             left join entities pc on pc.id = m.primary_contact_id
             where m.id = %s
@@ -65,7 +99,27 @@ def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> Mee
         row = cur.fetchone()
         if row is None:
             raise ValueError(f"No meeting found with id {meeting_id}")
-        meeting_date, location, audio_url, raw_transcript, summary, review_status, pc_name, pc_id = row
+        meeting_date, location, audio_url, raw_transcript, summary, review_status, pc_name, pc_id, kind = row
+
+        cur.execute(
+            """
+            select coalesce(e.canonical_name, a.name), a.employee_id
+            from meeting_attendees a left join entities e on e.id = a.employee_id
+            where a.meeting_id = %s order by 1
+            """,
+            (meeting_id,),
+        )
+        attendees = [{"name": n, "employee_id": (str(eid) if eid else None)} for n, eid in cur.fetchall()]
+
+        cur.execute(
+            """
+            select description, confidence, review_status, source_quote, id
+            from decisions where meeting_id = %s and review_status <> 'rejected'
+            order by created_at, description
+            """,
+            (meeting_id,),
+        )
+        decisions = [DecisionRow(d, c, rs, sq, str(i)) for d, c, rs, sq, i in cur.fetchall()]
 
         cur.execute(
             """
@@ -95,10 +149,13 @@ def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> Mee
             """,
             (meeting_id,),
         )
-        tasks = [
-            TaskRow(desc, name, (str(eid) if eid else None), due, status, conf, rs, sq, str(tid))
-            for desc, name, eid, due, status, conf, rs, sq, tid in cur.fetchall()
-        ]
+        task_rows = cur.fetchall()
+
+    owners = fetch_task_assignees(conn, [str(r[8]) for r in task_rows])
+    tasks = [
+        TaskRow(desc, name, (str(eid) if eid else None), due, status, conf, rs, sq, str(tid), owners.get(str(tid), []))
+        for desc, name, eid, due, status, conf, rs, sq, tid in task_rows
+    ]
 
     return MeetingMinutesData(
         meeting_id=meeting_id,
@@ -112,6 +169,9 @@ def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> Mee
         primary_contact_id=(str(pc_id) if pc_id else None),
         connections=connections,
         tasks=tasks,
+        kind=kind,
+        attendees=attendees,
+        decisions=decisions,
     )
 
 
@@ -123,15 +183,25 @@ def generate_readback(conn: psycopg.Connection, meeting_id: str) -> str:
 
     lines = [
         "MEETING",
+        f"Kind           : {'internal' if d.kind == 'internal' else 'field visit'}",
         f"Date           : {d.meeting_date}",
         f"Primary contact: {d.primary_contact_name or '(none)'}",
+        f"Attendees      : {', '.join(a['name'] for a in d.attendees) or '(none recorded)'}",
         f"Review         : {d.review_status}",
         "",
         "SUMMARY",
         d.summary or "(none)",
         "",
-        "CONNECTIONS",
+        "DECISIONS",
     ]
+    if d.decisions:
+        for dec in d.decisions:
+            flag = "" if dec.review_status == "auto_confirmed" else f"  [{dec.review_status}, {dec.confidence}]"
+            lines.append(f"  - {dec.description}{flag}")
+    else:
+        lines.append("  (none)")
+
+    lines += ["", "CONNECTIONS"]
     if d.connections:
         for c in d.connections:
             flag = "" if c.review_status == "auto_confirmed" else f"  [{c.review_status}, {c.confidence}]"
@@ -145,8 +215,9 @@ def generate_readback(conn: psycopg.Connection, meeting_id: str) -> str:
         for t in d.tasks:
             due = f"due {t.due_date}" if t.due_date else "no due date"
             ref = f" -- re: {t.related_entity_name}" if t.related_entity_name else ""
+            who = f" -- owner: {', '.join(a['name'] for a in t.assignees)}" if t.assignees else ""
             flag = "" if t.review_status == "auto_confirmed" else f"  [{t.review_status}, {t.confidence}]"
-            lines.append(f"  [ ] {t.description} ({due}){ref}{flag}")
+            lines.append(f"  [ ] {t.description} ({due}){ref}{who}{flag}")
     else:
         lines.append("  (none)")
 

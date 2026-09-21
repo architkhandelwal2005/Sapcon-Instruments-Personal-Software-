@@ -42,15 +42,27 @@ class ExtractedConnection(BaseModel):
 class ExtractedTask(BaseModel):
     description: str
     target_entity: Optional[str] = None
-    assignee: Optional[str] = None    # employee name, only if the speaker explicitly named one
+    assignees: list[str] = []         # staff explicitly named to do it; empty if nobody was named
     relative_due: Optional[RelativeDue] = None
     confidence: Confidence
     source_quote: Optional[str] = None   # filled by the verification pass
 
 
+class ExtractedDecision(BaseModel):
+    description: str                  # one standalone sentence, numbers exact
+    confidence: Confidence
+    source_quote: Optional[str] = None   # filled by the verification pass
+
+
+MeetingKind = Literal["field_visit", "internal"]
+
+
 class ExtractionResult(BaseModel):
+    kind: MeetingKind
+    attendees: list[str]              # staff present (internal meetings); names as on the roster
     entities: list[ExtractedEntity]
     connections: list[ExtractedConnection]
+    decisions: list[ExtractedDecision]
     tasks: list[ExtractedTask]
     summary: str                      # clean prose recap of the meeting
 
@@ -103,7 +115,11 @@ def build_tool_schema() -> dict:
                         "properties": {
                             "description": {"type": "string"},
                             "target_entity": {"type": "string"},
-                            "assignee": {"type": "string", "description": "employee name, only if explicitly named"},
+                            "assignees": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "staff explicitly named to do it",
+                            },
                             "relative_due": {
                                 "type": "object",
                                 "properties": {
@@ -117,8 +133,21 @@ def build_tool_schema() -> dict:
                         "required": ["description", "confidence"],
                     },
                 },
+                "decisions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "description": {"type": "string"},
+                            "confidence": conf,
+                        },
+                        "required": ["description", "confidence"],
+                    },
+                },
+                "kind": {"type": "string", "enum": ["field_visit", "internal"]},
+                "attendees": {"type": "array", "items": {"type": "string"}},
                 "summary": {"type": "string"},
             },
-            "required": ["entities", "connections", "tasks", "summary"],
+            "required": ["kind", "attendees", "entities", "connections", "decisions", "tasks", "summary"],
         },
     }

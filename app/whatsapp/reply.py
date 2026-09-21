@@ -12,6 +12,8 @@ _MAX_LEN = 1500  # comfortably under WhatsApp/Twilio's message size limit
 
 def meeting_reply(result: IngestResult, meeting_url: str) -> str:
     bits = []
+    if result.decision_count:
+        bits.append(f"{result.decision_count} decisions")
     if result.entity_count:
         bits.append(f"{result.entity_count} people/companies")
     if result.connection_count:

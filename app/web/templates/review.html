@@ -12,12 +12,13 @@
       {% for m in meetings %}
         <li>
           <a class="entity-link" href="/review/{{ m.meeting_id }}">
-            {{ m.meeting_date }} - {{ m.primary_contact_name or "(no contact)" }}
+            {{ m.meeting_date }} - {{ m.primary_contact_name or ("internal meeting" if m.kind == "internal" else "(no contact)") }}
           </a>
           <span class="badge badge-pending">{{ m.pending_total }} to check</span>
           <div class="meta">
             {% if m.pending_entities %}{{ m.pending_entities }} people/companies &middot; {% endif %}
             {% if m.pending_relations %}{{ m.pending_relations }} connections &middot; {% endif %}
+            {% if m.pending_decisions %}{{ m.pending_decisions }} decisions &middot; {% endif %}
             {% if m.pending_tasks %}{{ m.pending_tasks }} tasks{% endif %}
           </div>
         </li>

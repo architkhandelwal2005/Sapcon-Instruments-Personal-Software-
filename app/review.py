@@ -4,54 +4,53 @@ out of the trusted views (interaction history, connections, briefs) until a
 human confirms them here. Nothing is ever silently dropped - a rejected row
 keeps its text and its source_quote in the DB and can be restored.
 
-`kind` is one of: relation | task | entity.
-`decision` is one of: confirm | reject.
+`kind` is one of: relation | task | decision | entity.
+`decision` (the argument) is one of: confirm | reject.
 """
 
 from typing import Optional
 
 import psycopg
 
-_TABLE = {"relation": "relations", "task": "tasks", "entity": "entities"}
+_TABLE = {"relation": "relations", "task": "tasks", "decision": "decisions", "entity": "entities"}
+
+# Any unsettled item directly owned by a meeting. Entities are handled separately
+# (they belong to a meeting only through its primary contact or its relations).
+_PENDING_OWNED = """
+    select 1 from relations where meeting_id = %(m)s and review_status = 'pending'
+    union all
+    select 1 from tasks where meeting_id = %(m)s and review_status = 'pending'
+    union all
+    select 1 from decisions where meeting_id = %(m)s and review_status = 'pending'
+"""
 
 
 def finalise_meeting_status(conn: psycopg.Connection, meeting_id: str) -> str:
     """Set meetings.review_status to 'pending' while the meeting still has any
     pending relation, task, or attached entity; 'clear' once all are settled.
     Stamps reviewed_at the moment it first goes clear. Returns the new status."""
+    pending_items = (
+        _PENDING_OWNED
+        + """
+        union all
+        select 1 from entities e where e.review_status = 'pending' and (
+            e.id = m.primary_contact_id
+            or exists (
+                select 1 from relations r
+                where r.meeting_id = %(m)s and (r.source_id = e.id or r.target_id = e.id)
+                  and r.review_status <> 'rejected'
+            )
+        )
+        """
+    )
     with conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             update meetings m set
-                review_status = case when exists (
-                    select 1 from relations where meeting_id = %(m)s and review_status = 'pending'
-                    union all
-                    select 1 from tasks where meeting_id = %(m)s and review_status = 'pending'
-                    union all
-                    select 1 from entities e where e.review_status = 'pending' and (
-                        e.id = m.primary_contact_id
-                        or exists (
-                            select 1 from relations r
-                            where r.meeting_id = %(m)s and (r.source_id = e.id or r.target_id = e.id)
-                              and r.review_status <> 'rejected'
-                        )
-                    )
-                ) then 'pending' else 'clear' end,
+                review_status = case when exists ({pending_items}) then 'pending' else 'clear' end,
                 reviewed_at = case
-                    when reviewed_at is null and not exists (
-                        select 1 from relations where meeting_id = %(m)s and review_status = 'pending'
-                        union all
-                        select 1 from tasks where meeting_id = %(m)s and review_status = 'pending'
-                        union all
-                        select 1 from entities e where e.review_status = 'pending' and (
-                            e.id = m.primary_contact_id
-                            or exists (
-                                select 1 from relations r
-                                where r.meeting_id = %(m)s and (r.source_id = e.id or r.target_id = e.id)
-                                  and r.review_status <> 'rejected'
-                            )
-                        )
-                    ) then now() else reviewed_at end
+                    when reviewed_at is null and not exists ({pending_items}) then now()
+                    else reviewed_at end
             where m.id = %(m)s
             returning review_status
             """,
@@ -66,9 +65,10 @@ def pending_summary(conn: psycopg.Connection) -> list[dict]:
     with conn.cursor() as cur:
         cur.execute(
             """
-            select m.id, m.meeting_date, pc.canonical_name,
+            select m.id, m.meeting_date, pc.canonical_name, m.kind,
                    (select count(*) from relations r where r.meeting_id = m.id and r.review_status = 'pending') as rel_pending,
                    (select count(*) from tasks t where t.meeting_id = m.id and t.review_status = 'pending') as task_pending,
+                   (select count(*) from decisions d where d.meeting_id = m.id and d.review_status = 'pending') as dec_pending,
                    (select count(*) from entities e where e.review_status = 'pending' and (
                         e.id = m.primary_contact_id
                         or exists (select 1 from relations r
@@ -86,12 +86,14 @@ def pending_summary(conn: psycopg.Connection) -> list[dict]:
             "meeting_id": str(mid),
             "meeting_date": mdate,
             "primary_contact_name": pc,
+            "kind": kind,
             "pending_relations": rp,
             "pending_tasks": tp,
+            "pending_decisions": dp,
             "pending_entities": ep,
-            "pending_total": rp + tp + ep,
+            "pending_total": rp + tp + dp + ep,
         }
-        for mid, mdate, pc, rp, tp, ep in rows
+        for mid, mdate, pc, kind, rp, tp, dp, ep in rows
     ]
 
 
@@ -263,7 +265,12 @@ def rejected_items(conn: psycopg.Connection, meeting_id: str) -> dict:
             (meeting_id,),
         )
         tasks = [{"id": str(i), "description": d} for i, d in cur.fetchall()]
-    return {"relations": relations, "tasks": tasks}
+        cur.execute(
+            "select id, description from decisions where meeting_id = %s and review_status = 'rejected' order by description",
+            (meeting_id,),
+        )
+        decisions = [{"id": str(i), "description": d} for i, d in cur.fetchall()]
+    return {"relations": relations, "tasks": tasks, "decisions": decisions}
 
 
 def _affected_meetings(conn: psycopg.Connection, kind: str, item_id: str) -> list[str]:
@@ -321,6 +328,15 @@ def apply_decision(
                 )
             else:
                 cur.execute("update tasks set review_status = %s where id = %s", (new_status, item_id))
+
+        elif kind == "decision":
+            if decision == "confirm" and description is not None:
+                cur.execute(
+                    "update decisions set review_status = 'confirmed', description = %s where id = %s",
+                    (description.strip(), item_id),
+                )
+            else:
+                cur.execute("update decisions set review_status = %s where id = %s", (new_status, item_id))
 
         elif kind == "entity":
             if decision == "confirm":

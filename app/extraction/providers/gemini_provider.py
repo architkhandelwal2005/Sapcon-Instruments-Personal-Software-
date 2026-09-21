@@ -8,7 +8,7 @@ from app.extraction.schema import ExtractionResult
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
 
-def extract(transcript: str) -> ExtractionResult:
+def extract(transcript: str, roster: list[str]) -> ExtractionResult:
     model = os.environ.get("GEMINI_MODEL", DEFAULT_MODEL)
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
@@ -16,7 +16,7 @@ def extract(transcript: str) -> ExtractionResult:
         model=model,
         contents=transcript,
         config={
-            "system_instruction": build_system_prompt(),
+            "system_instruction": build_system_prompt(roster),
             "response_mime_type": "application/json",
             "response_schema": ExtractionResult,
             "temperature": 0,
