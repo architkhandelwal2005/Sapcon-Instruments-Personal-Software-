@@ -26,30 +26,42 @@ repo.
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | same as local `.env` |
 | `EXTRACTION_PROVIDER` | `anthropic` - **must** be this before any real recording or photo is processed (the free Gemini tier must never see real customer data). Note: voice-note **transcription** itself always goes through Gemini regardless of this setting - Anthropic's API has no audio input. If full privacy is ever required, transcription needs its own change (a paid Gemini key, or a different audio-capable provider). |
 | `ANTHROPIC_API_KEY` | your Anthropic key |
-| `TWILIO_ACCOUNT_SID` | from the Twilio console |
-| `TWILIO_AUTH_TOKEN` | from the Twilio console |
-| `TWILIO_WHATSAPP_NUMBER` | `whatsapp:+14155238886` for the sandbox (see below), or your dedicated number once you have one |
+| `GEMINI_API_KEY` | your Gemini key - transcription always uses it, whatever `EXTRACTION_PROVIDER` says |
+| `WHATSAPP_TOKEN` | access token from the Meta app (see below) |
+| `WHATSAPP_PHONE_NUMBER_ID` | the sending number's id from the Meta app (not the phone number itself) |
+| `WHATSAPP_APP_SECRET` | Meta app secret - used to check every webhook's signature |
+| `WHATSAPP_VERIFY_TOKEN` | any random string you choose; paste the same one into the Meta webhook form |
+| `GRAPH_API_VERSION` | optional, defaults to `v23.0` |
 | `PUBLIC_BASE_URL` | the URL the host gave you in step 4 |
 
 `WHATSAPP_ALLOWED_NUMBERS` from the original plan is superseded - senders are now
 managed in the `whatsapp_senders` database table instead (one row per person, no
 redeploy needed to add someone). See step 3 below.
 
-## 2. Set up Twilio WhatsApp (sandbox, to start)
+## 2. Set up WhatsApp (Meta Cloud API)
 
-1. Create a free Twilio account at twilio.com.
-2. In the console, go to **Messaging → Try it out → Send a WhatsApp message** - this
-   gives you the sandbox number and a join code (e.g. "join giraffe-happy").
-3. From the uncle's phone (and anyone else who should be able to text the bot), send
-   that "join <code>" message to the sandbox number via WhatsApp once. This activates
-   the sandbox for that phone number - it lasts a while but isn't permanent; Twilio
-   will tell you if it needs renewing.
-4. In the sandbox settings, set **"When a message comes in"** to:
-   `<PUBLIC_BASE_URL>/whatsapp/webhook`, method `POST`.
+Meta's own API, not Twilio: Twilio now requires a paid account for any WhatsApp
+sender, while Meta gives a free test number, free webhooks and a monthly free
+conversation allowance.
 
-A dedicated WhatsApp Business number (no join code, no sandbox banner) is a Twilio
-console step for later - it needs a WhatsApp Business Profile review, doesn't
-change any code here.
+1. At developers.facebook.com, create an app of type **Business** and add the
+   **WhatsApp** product. It comes with a free test sending number.
+2. From **WhatsApp → API Setup**, copy the **Phone number ID** and a temporary
+   access token. The temporary token expires in 24 hours - for something that
+   runs unattended, create a **System User** with a permanent token instead
+   (Business Settings → Users → System Users → Generate token, with
+   `whatsapp_business_messaging` and `whatsapp_business_management`).
+3. On the same API Setup page, add each phone that will message the bot to the
+   test number's recipient list (Meta sends that phone a confirmation code).
+4. **App Settings → Basic** holds the **App secret** - that is `WHATSAPP_APP_SECRET`.
+5. In **WhatsApp → Configuration**, set the callback URL to
+   `<PUBLIC_BASE_URL>/whatsapp/webhook` and the verify token to whatever you put in
+   `WHATSAPP_VERIFY_TOKEN`, then click Verify and subscribe to the **messages**
+   field. The app answers Meta's `hub.challenge` handshake on that same URL.
+
+Going live on the uncle's own number (instead of the test number) is a Meta
+Business verification step later - it changes `WHATSAPP_PHONE_NUMBER_ID` and the
+token, no code.
 
 ## 3. Add each phone number that's allowed to use the bot
 
