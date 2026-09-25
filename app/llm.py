@@ -8,6 +8,7 @@ meeting data. Flip it to 'anthropic' in .env before the first real recording.
 
 import json
 import os
+import re
 import time
 
 PROVIDER = os.environ.get("EXTRACTION_PROVIDER", "gemini").lower()
@@ -82,20 +83,52 @@ def _raw_transcribe(audio_bytes: bytes, mime_type: str) -> str:
     return (resp.text or "").strip()
 
 
-def _with_retries(call):
+# A rate-limited call says how long to wait. The per-minute quota asks for a
+# few seconds and is worth sitting out; the per-day quota asks for a similar
+# number but keeps refusing all day, so a cap stops us waiting inside a webhook
+# for a call that will not succeed. Above the cap the caller gets the error and
+# records the note for a later retry instead.
+_RATE_LIMIT_WAIT_CAP = 30
+
+
+def _retry_after(exc: Exception) -> float | None:
+    """Seconds the API asked us to wait, when the error is a rate limit worth
+    waiting out - otherwise None."""
+    text = str(exc)
+    if "RESOURCE_EXHAUSTED" not in text and "429" not in text and "rate_limit" not in text:
+        return None
+    match = re.search(r"['\"]retryDelay['\"]:\s*['\"](\d+(?:\.\d+)?)s", text) or re.search(
+        r"retry in (\d+(?:\.\d+)?)\s*s", text
+    )
+    wait = float(match.group(1)) + 1 if match else 5.0
+    return wait if wait <= _RATE_LIMIT_WAIT_CAP else None
+
+
+def with_retries(call):
+    """Retry transient model-API failures: connection resets, and rate limits
+    short enough to wait out. Shared by every model call - the extraction pass
+    included, since that is the one a lost voice note dies on."""
     last_exc: Exception | None = None
     for attempt in range(_RETRIES):
         try:
             return call()
         except (ConnectionError, TimeoutError, OSError) as exc:
             last_exc = exc
+            delay = 1.5 * (attempt + 1)
         except Exception as exc:  # httpx/httpcore connect errors don't subclass the stdlib ones
-            if type(exc).__name__ not in ("ConnectError", "ConnectTimeout", "ReadTimeout", "RemoteProtocolError"):
+            asked = _retry_after(exc)
+            if asked is None and type(exc).__name__ not in (
+                "ConnectError", "ConnectTimeout", "ReadTimeout", "RemoteProtocolError"
+            ):
                 raise
             last_exc = exc
+            delay = asked if asked is not None else 1.5 * (attempt + 1)
         if attempt < _RETRIES - 1:
-            time.sleep(1.5 * (attempt + 1))
+            time.sleep(delay)
     raise last_exc  # type: ignore[misc]
+
+
+_with_retries = with_retries  # the name the calls in this module already use
 
 
 def _raw_completion(system: str, user: str, max_tokens: int, *, image_bytes: bytes | None = None, mime_type: str | None = None) -> str:

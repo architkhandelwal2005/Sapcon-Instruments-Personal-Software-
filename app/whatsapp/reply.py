@@ -51,3 +51,21 @@ def ask_reply(result: AskResult) -> str:
     if result.answer.ungrounded_citations:
         text += f"\n\n({result.answer.ungrounded_citations} point(s) couldn't be matched to a transcript - double check those.)"
     return text
+
+
+def failure_reply(exc: Exception, *, saved: bool) -> str:
+    """What to send when processing threw. The daily free-tier quota is the
+    common case and is not the sender's fault, so it says so rather than
+    looking like the note was rejected. `saved` is True for the paths that
+    persist the note to ingestion_failures for a later retry - a lookup has
+    nothing to save, so it must not claim otherwise."""
+    from app.ingestion.failures import classify_error
+
+    if classify_error(exc) == "rate_limit":
+        if saved:
+            return ("Got it, but today's AI limit is used up - your note is saved "
+                    "and will be processed once the limit resets.")
+        return "Today's AI limit is used up - ask me again once it resets."
+    if saved:
+        return "Got your message but couldn't process it - it's saved, we'll follow up."
+    return "Couldn't answer that just now - try again in a moment."

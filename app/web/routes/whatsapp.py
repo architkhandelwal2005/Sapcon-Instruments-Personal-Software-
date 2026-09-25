@@ -27,7 +27,7 @@ from app.ingestion.pipeline import ingest_new_meeting
 from app.llm import transcribe_audio
 from app.query import ask as run_ask
 from app.whatsapp.client import download_media, send_whatsapp, valid_signature
-from app.whatsapp.reply import ask_reply, capture_reply, meeting_reply
+from app.whatsapp.reply import ask_reply, capture_reply, failure_reply, meeting_reply
 
 router = APIRouter()
 
@@ -101,11 +101,21 @@ def _process_message(*, message: dict) -> None:
             return  # not on the allowlist - silently ignore
         try:
             _dispatch(conn, from_, message, logged_by)
-        except Exception:
-            send_whatsapp(from_, "Got your message but couldn't process it - will follow up.")
+        except Exception as exc:
+            # Anything that logs a note persists it to ingestion_failures before
+            # re-raising, so it can be retried; a lookup has nothing to keep.
+            saved = _is_lookup(message) is False
+            send_whatsapp(from_, failure_reply(exc, saved=saved))
             raise
     finally:
         release_connection(conn)
+
+
+def _is_lookup(message: dict) -> bool:
+    """A message starting with "ask" is a question, not something to log."""
+    if message.get("type") != "text":
+        return False
+    return ((message.get("text") or {}).get("body") or "").strip().lower().startswith("ask")
 
 
 def _dispatch(conn, from_, message: dict, logged_by) -> None:
@@ -126,7 +136,7 @@ def _dispatch(conn, from_, message: dict, logged_by) -> None:
     text = ((message.get("text") or {}).get("body") or "").strip()
     if not text:
         return
-    if text.lower().startswith("ask"):
+    if _is_lookup(message):
         _handle_ask(conn, from_, text[3:].strip(" :").strip())
         return
     _handle_text_meeting(conn, from_, text, logged_by, base)
