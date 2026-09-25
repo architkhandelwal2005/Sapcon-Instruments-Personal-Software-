@@ -27,6 +27,7 @@ from app.ingestion.pipeline import ingest_new_meeting
 from app.llm import transcribe_audio
 from app.query import ask as run_ask
 from app.whatsapp.client import download_media, send_whatsapp, valid_signature
+from app.whatsapp.intent import is_question
 from app.whatsapp.reply import ask_reply, capture_reply, failure_reply, meeting_reply
 
 router = APIRouter()
@@ -102,20 +103,30 @@ def _process_message(*, message: dict) -> None:
         try:
             _dispatch(conn, from_, message, logged_by)
         except Exception as exc:
-            # Anything that logs a note persists it to ingestion_failures before
-            # re-raising, so it can be retried; a lookup has nothing to keep.
-            saved = _is_lookup(message) is False
-            send_whatsapp(from_, failure_reply(exc, saved=saved))
+            # The note paths persist to ingestion_failures before re-raising and
+            # mark the exception as such; a lookup has nothing to keep, and the
+            # reply must not claim otherwise.
+            send_whatsapp(from_, failure_reply(exc, saved=getattr(exc, "note_was_saved", False)))
             raise
     finally:
         release_connection(conn)
 
 
-def _is_lookup(message: dict) -> bool:
-    """A message starting with "ask" is a question, not something to log."""
-    if message.get("type") != "text":
-        return False
-    return ((message.get("text") or {}).get("body") or "").strip().lower().startswith("ask")
+_ASK_PREFIX = "ask"
+
+
+def _strip_ask(text: str) -> str:
+    return text[len(_ASK_PREFIX):].strip(" :").strip()
+
+
+def _is_lookup(text: str) -> bool:
+    """Whether this message asks for information rather than recording it.
+    "ask ..." still forces a question outright; everything else is classified,
+    and anything not clearly a question is treated as a note to log."""
+    body = (text or "").strip()
+    if body.lower().startswith(_ASK_PREFIX):
+        return True
+    return is_question(body)
 
 
 def _dispatch(conn, from_, message: dict, logged_by) -> None:
@@ -136,10 +147,21 @@ def _dispatch(conn, from_, message: dict, logged_by) -> None:
     text = ((message.get("text") or {}).get("body") or "").strip()
     if not text:
         return
-    if _is_lookup(message):
-        _handle_ask(conn, from_, text[3:].strip(" :").strip())
+    _route_words(conn, from_, text, logged_by, base, audio_path=None)
+
+
+def _route_words(conn, from_, text: str, logged_by, base, *, audio_path) -> None:
+    """One route for anything that arrives as words, typed or spoken - a voice
+    note is no less likely to be a question than a typed line."""
+    if _is_lookup(text):
+        _handle_ask(conn, from_, _strip_ask(text) if text.lower().startswith(_ASK_PREFIX) else text)
         return
-    _handle_text_meeting(conn, from_, text, logged_by, base)
+    try:
+        result = ingest_new_meeting(conn, text, date.today(), audio_path=audio_path, logged_by=logged_by)
+    except Exception as exc:
+        exc.note_was_saved = True  # ingest_new_meeting recorded it for a retry
+        raise
+    send_whatsapp(from_, meeting_reply(result, f"{base}/meetings/{result.meeting_id}"))
 
 
 def _handle_audio(conn, from_, media_id, logged_by, base) -> None:
@@ -152,13 +174,7 @@ def _handle_audio(conn, from_, media_id, logged_by, base) -> None:
     if not transcript.strip():
         send_whatsapp(from_, "Got the voice note but couldn't make out any speech - try again?")
         return
-    result = ingest_new_meeting(conn, transcript, date.today(), audio_path=audio_path, logged_by=logged_by)
-    send_whatsapp(from_, meeting_reply(result, f"{base}/meetings/{result.meeting_id}"))
-
-
-def _handle_text_meeting(conn, from_, text, logged_by, base) -> None:
-    result = ingest_new_meeting(conn, text, date.today(), logged_by=logged_by)
-    send_whatsapp(from_, meeting_reply(result, f"{base}/meetings/{result.meeting_id}"))
+    _route_words(conn, from_, transcript, logged_by, base, audio_path=audio_path)
 
 
 def _handle_photo(conn, from_, caption, media_id, logged_by, base) -> None:
