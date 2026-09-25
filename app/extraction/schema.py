@@ -14,9 +14,19 @@ Provenance = Literal["direct", "hearsay"]
 SUGGESTED_ROLES = ["consultant", "advisory", "oem", "end_user", "employer", "competitor", "referral"]
 
 
+WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+Weekday = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
 class RelativeDue(BaseModel):
-    amount: int
-    unit: Literal["day", "week", "month"]
+    """Either an offset ("next week" -> amount 1, unit "week") or a named day
+    ("on Monday" -> weekday "monday"), never both. A named day has no honest
+    offset - "Monday" said on a Friday is 3 days out, not 7 - so squeezing it
+    into amount/unit is what produced wrong due dates."""
+
+    amount: Optional[int] = None
+    unit: Optional[Literal["day", "week", "month"]] = None
+    weekday: Optional[Weekday] = None
 
 
 class ExtractedEntity(BaseModel):
@@ -122,11 +132,14 @@ def build_tool_schema() -> dict:
                             },
                             "relative_due": {
                                 "type": "object",
+                                "description": (
+                                    "an offset (amount + unit) OR a named day (weekday), never both"
+                                ),
                                 "properties": {
                                     "amount": {"type": "integer"},
                                     "unit": {"type": "string", "enum": ["day", "week", "month"]},
+                                    "weekday": {"type": "string", "enum": WEEKDAYS},
                                 },
-                                "required": ["amount", "unit"],
                             },
                             "confidence": conf,
                         },

@@ -59,8 +59,11 @@ will handle the enquiry increase", "ask VT to call them back"). Ongoing responsi
 For each: what needs doing, the external entity it relates to (if any), assignees (every staff \
 member explicitly named to do it, roster spelling - when a team is named, list EVERY member \
 named, even if the speaker stumbled or repeated a name; never guess, never default to the \
-speaker; empty if nobody was named), and relative_due as an amount + unit ("day"/"week"/"month") if a \
-timeframe was mentioned - do NOT compute a date. Omit relative_due if no timeframe.
+speaker; empty if nobody was named), and relative_due if a timeframe was mentioned - do NOT compute \
+a date. relative_due is EITHER an offset (amount + unit "day"/"week"/"month": "next week" -> amount \
+1, unit "week") OR a named day of the week (weekday: "call him on Monday" -> weekday "monday"), \
+never both - a named day is not an offset, and forcing it into one gets the date wrong. Omit \
+relative_due if no timeframe.
 
 6. SUMMARY - a short, clean prose recap: who was met or who attended, what was discussed, what \
 matters. This is read by a human later.
