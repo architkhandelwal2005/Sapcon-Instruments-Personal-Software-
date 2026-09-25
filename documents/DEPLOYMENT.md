@@ -44,20 +44,68 @@ Meta's own API, not Twilio: Twilio now requires a paid account for any WhatsApp
 sender, while Meta gives a free test number, free webhooks and a monthly free
 conversation allowance.
 
-1. At developers.facebook.com, create an app of type **Business** and add the
-   **WhatsApp** product. It comes with a free test sending number.
-2. From **WhatsApp → API Setup**, copy the **Phone number ID** and a temporary
-   access token. The temporary token expires in 24 hours - for something that
-   runs unattended, create a **System User** with a permanent token instead
-   (Business Settings → Users → System Users → Generate token, with
-   `whatsapp_business_messaging` and `whatsapp_business_management`).
-3. On the same API Setup page, add each phone that will message the bot to the
-   test number's recipient list (Meta sends that phone a confirmation code).
-4. **App Settings → Basic** holds the **App secret** - that is `WHATSAPP_APP_SECRET`.
-5. In **WhatsApp → Configuration**, set the callback URL to
-   `<PUBLIC_BASE_URL>/whatsapp/webhook` and the verify token to whatever you put in
-   `WHATSAPP_VERIFY_TOKEN`, then click Verify and subscribe to the **messages**
-   field. The app answers Meta's `hub.challenge` handshake on that same URL.
+This is already done for Sapcon; the live values are:
+
+| Thing | Value |
+|---|---|
+| Meta app | **Sapcon CRM**, app id `1410064287885344` |
+| Business portfolio | **Sapcon Instruments**, id `1369988595326618` |
+| WhatsApp Business Account (WABA) | `2547089955764456` |
+| Test sending number | `+1 555 183-7965`, phone number id `1259522373920794` |
+| System user (owns the permanent token) | **Sapcon CRM Bot**, id `61594702773005` |
+
+To redo it from scratch (or for a second environment):
+
+1. At developers.facebook.com, create an app with the **Connect with customers
+   through WhatsApp** use case. It needs a **business portfolio** - create one at
+   business.facebook.com first if the account has none, or app creation blocks at
+   the Business step.
+2. **Use case -> Step 1. Try it out** claims the free test number and shows its
+   **Phone number ID** and **WhatsApp Business account ID**.
+3. The token offered on that page is temporary (24 hours). For something that runs
+   unattended, create a **System User** instead (Business settings -> Users ->
+   System users), assign it the app *and* the WABA with full access, then
+   **Generate token** with expiration **Never** and scopes
+   `whatsapp_business_messaging` + `whatsapp_business_management`. That is
+   `WHATSAPP_TOKEN`.
+4. On the same Step 1 page, add each phone that will message the bot to the test
+   number's recipient list (max 5; Meta sends that phone a code *over WhatsApp*,
+   and it expires within about a minute).
+5. **App settings -> Basic** holds the **App secret** - that is
+   `WHATSAPP_APP_SECRET`. Reset it there if it ever leaks.
+6. **Register the number on the Cloud API** before sending anything, or every send
+   fails with `(#133010) Account not registered`:
+
+   ```
+   POST https://graph.facebook.com/v23.0/<phone-number-id>/register
+   {"messaging_product": "whatsapp", "pin": "<any 6 digits>"}
+   ```
+
+7. Point the webhook at the deployed app - either in **Use case -> Step 2.
+   Production setup -> Configure Webhooks** (callback URL
+   `<PUBLIC_BASE_URL>/whatsapp/webhook`, verify token = `WHATSAPP_VERIFY_TOKEN`),
+   or over the API, which also subscribes the `messages` field in one call:
+
+   ```
+   POST https://graph.facebook.com/v23.0/<app-id>/subscriptions
+        ?access_token=<app-id>|<app-secret>
+   object=whatsapp_business_account&fields=messages
+   &callback_url=<PUBLIC_BASE_URL>/whatsapp/webhook&verify_token=<verify token>
+
+   POST https://graph.facebook.com/v23.0/<waba-id>/subscribed_apps   # bearer token
+   ```
+
+   Both are needed: the first subscribes the app, the second subscribes the WABA
+   to the app. The app answers Meta's `hub.challenge` handshake on that same URL.
+
+Two things that look like faults but aren't:
+
+- **The test number is not reachable from a phone's contact list** (555 numbers
+  don't resolve in WhatsApp). The business has to open the conversation first -
+  send the `hello_world` template to the recipient, then reply inside that thread.
+- **While the app is unpublished, Meta only delivers webhooks for people with a
+  role on the app** (admin, developer, tester). Adding the uncle means giving his
+  Facebook account a tester role, or publishing the app.
 
 Going live on the uncle's own number (instead of the test number) is a Meta
 Business verification step later - it changes `WHATSAPP_PHONE_NUMBER_ID` and the
