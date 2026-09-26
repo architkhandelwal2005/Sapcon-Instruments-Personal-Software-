@@ -24,7 +24,9 @@ dependencies = [
 # Tests cover the pure logic only - formatting, budgets, phone normalisation,
 # PIN hashing. Those need no database and no model call, so the suite runs in
 # under a second and costs nothing against the Gemini daily quota.
-dev = ["pytest>=8.0"]
+# pymupdf/pillow are for the local card-and-diary batch scripts only - the
+# deployed image takes photos from WhatsApp, never PDFs.
+dev = ["pytest>=8.0", "pymupdf>=1.24", "pillow>=10.0"]
 
 # sentence-transformers (local MiniLM embeddings) deferred until step 3 shows
 # trigram + phonetic matching (jellyfish) actually misses matches it would catch —
