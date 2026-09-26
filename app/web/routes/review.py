@@ -1,10 +1,8 @@
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 
 from app.db import get_connection, release_connection
 from app.minutes.generate import fetch_meeting_minutes_data
@@ -16,9 +14,9 @@ from app.review import (
     pending_summary,
     rejected_items,
 )
+from app.web.templating import templates
 
 router = APIRouter()
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
 
 @router.get("/review", response_class=HTMLResponse)

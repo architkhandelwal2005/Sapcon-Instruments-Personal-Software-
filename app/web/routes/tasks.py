@@ -6,18 +6,16 @@ changed only by a human clicking here, same as leads.
 """
 
 from datetime import date
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 
 from app.db import get_connection, release_connection
 from app.minutes.generate import fetch_task_assignees
+from app.web.templating import templates
 
 router = APIRouter()
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
 
 def _employee_options(conn) -> list[dict]:

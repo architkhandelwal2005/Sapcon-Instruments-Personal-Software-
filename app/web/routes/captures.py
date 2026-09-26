@@ -4,19 +4,17 @@ app.capture.pipeline.ingest_capture directly with the same signature.
 """
 
 from datetime import date, datetime
-from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 
 from app.capture.pipeline import ingest_capture
 from app.db import get_connection, release_connection
+from app.web.templating import templates
 
 router = APIRouter()
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
 
 @router.get("/captures/new", response_class=HTMLResponse)

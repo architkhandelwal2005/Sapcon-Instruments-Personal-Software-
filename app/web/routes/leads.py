@@ -9,18 +9,16 @@ lead's entity, reusing fetch_interaction_history() as-is.
 """
 
 from datetime import date, datetime
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 
 from app.db import get_connection, release_connection
 from app.web.routes.entities import fetch_entity, fetch_interaction_history
+from app.web.templating import templates
 
 router = APIRouter()
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
 STATUSES = ("open", "converted", "dropped")
 STALE_AFTER_DAYS = 14

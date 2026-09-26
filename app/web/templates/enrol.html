@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Set your PIN - Sapcon CRM{% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<h1>Set your PIN</h1>
+<p class="muted">Use the setup code you were given. It works once, and expires after two days.</p>
+
+{% if message %}<p class="flash">{{ message }}</p>{% endif %}
+
+<form method="post" action="/enrol" class="stacked">
+  <label>Phone number
+    <input type="tel" name="phone" inputmode="tel" placeholder="98933 51932" required autofocus>
+  </label>
+  <label>Setup code
+    <input type="text" name="code" autocapitalize="characters" required>
+  </label>
+  <label>New PIN ({{ min_pin }} digits or more)
+    <input type="password" name="pin" inputmode="numeric" minlength="{{ min_pin }}" required>
+  </label>
+  <label>New PIN again
+    <input type="password" name="pin_again" inputmode="numeric" minlength="{{ min_pin }}" required>
+  </label>
+  <button type="submit">Set PIN and sign in</button>
+</form>
+
+<p class="muted"><a href="/login">Back to sign in</a></p>
+{% endblock %}

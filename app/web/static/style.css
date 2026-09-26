@@ -569,3 +569,45 @@ form.correction-form button {
 .entity-link:hover {
   text-decoration: underline;
 }
+
+/* --- signing in, and the pages that manage who can --- */
+
+header.site-header .site-user {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.9rem;
+}
+
+header.site-header .site-user form { display: inline; }
+
+button.linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+button.linkish:hover { text-decoration: underline; }
+
+main.narrow { max-width: 26rem; }
+
+form.stacked { display: flex; flex-direction: column; gap: 0.9rem; max-width: 22rem; }
+form.stacked label { display: flex; flex-direction: column; gap: 0.3rem; font-weight: 500; }
+form.stacked input { padding: 0.55rem 0.6rem; font-size: 1rem; }
+
+form.inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.8rem; }
+form.inline-form label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.9rem; }
+
+table.listing { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+table.listing th, table.listing td {
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.92rem;
+}
+table.listing td.actions { display: flex; gap: 0.4rem; }

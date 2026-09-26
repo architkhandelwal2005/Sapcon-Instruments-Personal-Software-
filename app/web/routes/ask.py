@@ -1,17 +1,15 @@
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 
 from app.db import get_connection, release_connection
 from app.query import ask as run_ask
 from app.query import brief as run_brief
 from app.query import connect as run_connect
+from app.web.templating import templates
 
 router = APIRouter()
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
 
 @router.get("/ask", response_class=HTMLResponse)

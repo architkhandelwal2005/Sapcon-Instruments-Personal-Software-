@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}People - Sapcon CRM{% endblock %}
+{% block content %}
+<h1>People who can sign in</h1>
+
+{% if error %}<p class="flash">{{ error }}</p>{% endif %}
+
+{% if issued_code %}
+<p class="flash">
+  Setup code for <strong>{{ issued_for }}</strong>: <code>{{ issued_code }}</code><br>
+  <span class="muted">Shown once. Read it to them, then they set their own PIN at /enrol.
+  It expires in two days.</span>
+</p>
+{% endif %}
+
+<table class="listing">
+  <thead>
+    <tr><th>Name</th><th>Phone</th><th>Role</th><th>PIN</th><th>Signed in</th><th>Last login</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for u in users %}
+    <tr{% if u.disabled %} class="muted"{% endif %}>
+      <td>{{ u.name }}{% if u.disabled %} (off){% endif %}</td>
+      <td>{{ u.phone }}</td>
+      <td>{{ u.role }}</td>
+      <td>{% if u.has_pin %}set{% elif u.code_pending %}code issued{% else %}none{% endif %}</td>
+      <td>{{ u.sessions }}</td>
+      <td>{{ u.last_login_at.strftime('%d %b %Y') if u.last_login_at else '-' }}</td>
+      <td class="actions">
+        <form method="post" action="/admin/users/{{ u.entity_id }}/enrol-code">
+          <button type="submit">{% if u.has_pin %}Reset PIN{% else %}Issue code{% endif %}</button>
+        </form>
+        <form method="post" action="/admin/users/{{ u.entity_id }}/disabled">
+          <input type="hidden" name="disabled" value="{{ '0' if u.disabled else '1' }}">
+          <button type="submit">{{ 'Turn on' if u.disabled else 'Turn off' }}</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="muted">Nobody has a login yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Give someone a login</h2>
+{% if candidates %}
+<form method="post" action="/admin/users" class="inline-form">
+  <label>Person
+    <select name="entity_id" required>
+      {% for c in candidates %}<option value="{{ c.entity_id }}">{{ c.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Phone <input type="tel" name="phone" placeholder="98933 51932" required></label>
+  <label>Role
+    <select name="role">
+      {% for r in roles %}<option value="{{ r }}"{% if r == 'employee' %} selected{% endif %}>{{ r }}</option>{% endfor %}
+    </select>
+  </label>
+  <button type="submit">Add</button>
+</form>
+<p class="muted">office clears the review queue; employee sees only their own tasks and leads.</p>
+{% else %}
+<p class="muted">Every employee already has a login.</p>
+{% endif %}
+{% endblock %}

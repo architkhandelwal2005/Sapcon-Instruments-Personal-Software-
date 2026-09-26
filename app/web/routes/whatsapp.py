@@ -25,6 +25,7 @@ from app.capture.pipeline import ingest_capture
 from app.db import get_connection, release_connection
 from app.ingestion.pipeline import append_correction, ingest_new_meeting
 from app.llm import transcribe_audio
+from app.phone import DEFAULT_CC, normalize_phone
 from app.query import ask as run_ask
 from app.whatsapp.client import download_media, send_whatsapp, valid_signature
 from app.whatsapp.intent import is_question
@@ -80,16 +81,20 @@ def _messages(payload: dict) -> list[dict]:
 
 
 def _lookup_sender(conn, wa_id: str) -> Optional[str]:
-    """wa_id is digits only ("919893351932"); stored numbers are E.164
-    ("+919893351932"), so match on digits."""
-    digits = re.sub(r"\D", "", wa_id or "")
-    if not digits:
+    """wa_id is digits only ("919893351932") while a stored number is written
+    however it was entered, so both sides go through the same normalisation.
+    The bare national number is accepted too, since a row saved as
+    "9893351932" means the same phone."""
+    try:
+        digits = normalize_phone(wa_id)
+    except ValueError:
         return None
+    national = digits[len(DEFAULT_CC):] if digits.startswith(DEFAULT_CC) else digits
     with conn.cursor() as cur:
         cur.execute(
-            "select entity_id from whatsapp_senders "
-            "where regexp_replace(phone, '\\D', '', 'g') = %s",
-            (digits,),
+            r"select entity_id from whatsapp_senders "
+            r"where regexp_replace(phone, '\D', '', 'g') in (%s, %s)",
+            (digits, national),
         )
         row = cur.fetchone()
     return str(row[0]) if row else None

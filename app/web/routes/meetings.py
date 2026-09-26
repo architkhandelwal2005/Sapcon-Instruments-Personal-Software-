@@ -1,18 +1,16 @@
-from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 
 from app.db import get_connection, release_connection
 from app.ingestion.pipeline import append_correction
 from app.minutes.generate import fetch_meeting_minutes_data, generate_readback
 from app.web.helpers import save_and_transcribe, with_overdue_flags
+from app.web.templating import templates
 
 router = APIRouter()
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
 
 @router.get("/meetings", response_class=HTMLResponse)

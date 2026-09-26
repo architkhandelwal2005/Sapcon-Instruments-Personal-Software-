@@ -8,14 +8,24 @@
 </head>
 <body>
   <header class="site-header">
+    {# Links are hidden when the signed-in person cannot follow them, so nobody
+       clicks into a page that will only bounce them back. #}
+    {% set role = actor.role if actor else none %}
     <a href="/">Sapcon CRM</a>
-    <a href="/meetings">Meetings</a>
-    <a href="/contacts">Contacts</a>
+    {% if role != 'employee' %}<a href="/meetings">Meetings</a>{% endif %}
+    {% if role != 'employee' %}<a href="/contacts">Contacts</a>{% endif %}
     <a href="/leads">Leads</a>
     <a href="/tasks">Tasks</a>
-    <a href="/ask">Ask</a>
-    <a href="/review">Review</a>
+    {% if role != 'employee' %}<a href="/ask">Ask</a>{% endif %}
+    {% if role != 'employee' %}<a href="/review">Review</a>{% endif %}
     <a href="/meetings/new">New meeting</a>
+    {% if role == 'owner' %}<a href="/admin/users">People</a>{% endif %}
+    {% if actor %}
+      <span class="site-user">
+        {{ actor.name }}<span class="muted"> ({{ actor.role }})</span>
+        <form method="post" action="/logout"><button type="submit" class="linkish">Sign out</button></form>
+      </span>
+    {% endif %}
   </header>
   <main class="{% block main_class %}{% endblock %}">
     {% block content %}{% endblock %}

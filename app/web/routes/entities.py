@@ -1,17 +1,15 @@
-from pathlib import Path
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 
 from app.db import get_connection, release_connection
 from app.entity_resolution.review_queue import fetch_flags_for_entity
 from app.graph.entity_view import fetch_entity_connections
 from app.minutes.generate import TaskRow, fetch_meeting_minutes_data, fetch_task_assignees
 from app.web.helpers import with_overdue_flags
+from app.web.templating import templates
 
 router = APIRouter()
-templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
 
 def fetch_entity(conn, entity_id: str) -> dict:
