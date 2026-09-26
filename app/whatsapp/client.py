@@ -38,9 +38,13 @@ def valid_signature(raw_body: bytes, header: str) -> bool:
     return hmac.compare_digest(expected, got)
 
 
-def send_whatsapp(to: str, body: str) -> None:
+def send_whatsapp(to: str, body: str) -> str | None:
     """`to` is the sender's wa_id exactly as the webhook reported it (digits,
-    no plus), so a reply always goes back to the chat it came from."""
+    no plus), so a reply always goes back to the chat it came from.
+
+    Returns the outbound message id, which is how a later reply to this exact
+    message can be recognised as belonging to it. A message that sent fine but
+    whose id could not be read returns None rather than failing the send."""
     url = f"{_GRAPH}/{GRAPH_VERSION}/{os.environ['WHATSAPP_PHONE_NUMBER_ID']}/messages"
     payload = json.dumps({
         "messaging_product": "whatsapp",
@@ -52,8 +56,12 @@ def send_whatsapp(to: str, body: str) -> None:
         url, data=payload, method="POST",
         headers={"Authorization": f"Bearer {_token()}", "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=60):
-        pass
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        raw = resp.read()
+    try:
+        return json.loads(raw)["messages"][0]["id"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
 
 
 def download_media(media_id: str) -> tuple[bytes, str]:

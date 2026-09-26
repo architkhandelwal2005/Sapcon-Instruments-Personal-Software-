@@ -21,6 +21,12 @@ class ResolutionResult:
     reason: str = ""
     possible_duplicate_of: Optional[str] = None
     conflicts: list[str] = field(default_factory=list)
+    entity_type: str = ""
+    mentioned_name: str = ""
+    """The name as it was extracted, before resolution. For a link,
+    canonical_name is the EXISTING record's name, so only this says what was
+    actually heard - and the difference between the two is exactly what a human
+    needs to see to catch a wrong link."""
 
 
 def resolve_entity(
@@ -57,6 +63,7 @@ def resolve_entity(
         return ResolutionResult(
             entity_id=top.id, outcome="linked", canonical_name=top.canonical_name,
             review_status="auto_confirmed", reason=d.reason, conflicts=conflicts,
+            mentioned_name=name, entity_type=entity_type,
         )
 
     if d.decision in ("match", "uncertain") and candidates:
@@ -67,13 +74,15 @@ def resolve_entity(
         return ResolutionResult(
             entity_id=entity_id, outcome="uncertain_created", canonical_name=name,
             review_status="pending", reason=d.reason, possible_duplicate_of=dup_name,
+            mentioned_name=name, entity_type=entity_type,
         )
 
     review_status = "auto_confirmed" if extraction_confidence == "high" and d.confidence == "high" else "pending"
     entity_id = _create_entity(conn, name, entity_type, attrs, extraction_confidence, review_status, None, source, capture_event_id)
     return ResolutionResult(
         entity_id=entity_id, outcome="created", canonical_name=name,
-        review_status=review_status, reason=d.reason,
+        review_status=review_status, reason=d.reason, mentioned_name=name,
+        entity_type=entity_type,
     )
 
 

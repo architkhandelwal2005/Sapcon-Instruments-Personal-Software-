@@ -13,7 +13,11 @@ _pool: ConnectionPool | None = None
 def _get_pool() -> ConnectionPool:
     global _pool
     if _pool is None:
-        _pool = ConnectionPool(os.environ["DATABASE_URL"], min_size=1, max_size=5)
+        # A WhatsApp message holds one connection for its whole background task -
+        # transcription, extraction, resolution, then the readback fetch - so a
+        # couple of voice notes arriving together can starve the web pages at
+        # max_size=5.
+        _pool = ConnectionPool(os.environ["DATABASE_URL"], min_size=1, max_size=10)
         atexit.register(_pool.close)
     return _pool
 

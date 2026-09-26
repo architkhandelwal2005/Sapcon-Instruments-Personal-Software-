@@ -23,11 +23,13 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 
 from app.capture.pipeline import ingest_capture
 from app.db import get_connection, release_connection
-from app.ingestion.pipeline import ingest_new_meeting
+from app.ingestion.pipeline import append_correction, ingest_new_meeting
 from app.llm import transcribe_audio
 from app.query import ask as run_ask
 from app.whatsapp.client import download_media, send_whatsapp, valid_signature
 from app.whatsapp.intent import is_question
+from app.minutes.generate import fetch_meeting_minutes_data
+from app.whatsapp.readback import meeting_readback_reply
 from app.whatsapp.reply import ask_reply, capture_reply, failure_reply, meeting_reply
 
 router = APIRouter()
@@ -129,12 +131,19 @@ def _is_lookup(text: str) -> bool:
     return is_question(body)
 
 
+def _reply_to(message: dict) -> Optional[str]:
+    """The id of the message this one replies to, when Meta reports one."""
+    return (message.get("context") or {}).get("id")
+
+
 def _dispatch(conn, from_, message: dict, logged_by) -> None:
     base = _base_url()
     kind = message.get("type")
+    reply_to = _reply_to(message)
 
     if kind == "audio":
-        _handle_audio(conn, from_, (message.get("audio") or {}).get("id"), logged_by, base)
+        _handle_audio(conn, from_, (message.get("audio") or {}).get("id"), logged_by, base,
+                      reply_to=reply_to)
         return
     if kind == "image":
         image = message.get("image") or {}
@@ -147,12 +156,20 @@ def _dispatch(conn, from_, message: dict, logged_by) -> None:
     text = ((message.get("text") or {}).get("body") or "").strip()
     if not text:
         return
-    _route_words(conn, from_, text, logged_by, base, audio_path=None)
+    _route_words(conn, from_, text, logged_by, base, audio_path=None, reply_to=reply_to)
 
 
-def _route_words(conn, from_, text: str, logged_by, base, *, audio_path) -> None:
+def _route_words(conn, from_, text: str, logged_by, base, *, audio_path, reply_to: Optional[str]) -> None:
     """One route for anything that arrives as words, typed or spoken - a voice
-    note is no less likely to be a question than a typed line."""
+    note is no less likely to be a question than a typed line.
+
+    A reply to a readback we sent skips the question check entirely: replying to
+    that message is unambiguous intent, and a correction misread as a question
+    would be lost. It also saves a model call."""
+    meeting_id = _correction_target(conn, reply_to)
+    if meeting_id is not None:
+        _apply_correction(conn, from_, text, meeting_id, logged_by, base, audio_path=audio_path)
+        return
     if _is_lookup(text):
         _handle_ask(conn, from_, _strip_ask(text) if text.lower().startswith(_ASK_PREFIX) else text)
         return
@@ -161,10 +178,63 @@ def _route_words(conn, from_, text: str, logged_by, base, *, audio_path) -> None
     except Exception as exc:
         exc.note_was_saved = True  # ingest_new_meeting recorded it for a retry
         raise
-    send_whatsapp(from_, meeting_reply(result, f"{base}/meetings/{result.meeting_id}"))
+    _send_readback(conn, from_, result, base)
 
 
-def _handle_audio(conn, from_, media_id, logged_by, base) -> None:
+def _apply_correction(conn, from_, text, meeting_id, logged_by, base, *, audio_path) -> None:
+    try:
+        result = append_correction(conn, meeting_id, text, audio_path=audio_path)
+    except Exception as exc:
+        exc.note_was_saved = True
+        raise
+    _send_readback(conn, from_, result, base)
+
+
+def _correction_target(conn, reply_to: Optional[str]) -> Optional[str]:
+    """The meeting a readback belongs to, when this message replies to one.
+
+    Deliberately no "most recent meeting" fallback: he records between
+    appointments, so a time-window guess would attach a correction to the wrong
+    meeting and nothing would ever surface it."""
+    if not reply_to:
+        return None
+    with conn.cursor() as cur:
+        cur.execute("select meeting_id from whatsapp_threads where wa_message_id = %s", (reply_to,))
+        row = cur.fetchone()
+    return str(row[0]) if row else None
+
+
+def _send_readback(conn, from_, result, base) -> None:
+    """The readback is worth a lot but is not worth losing a meeting over: the
+    note is already committed by here, so any failure falls back to counts."""
+    url = f"{base}/meetings/{result.meeting_id}"
+    try:
+        data = fetch_meeting_minutes_data(conn, result.meeting_id)
+        body = meeting_readback_reply(data, result.resolutions, url)
+    except Exception:
+        body = meeting_reply(result, url)
+    wa_message_id = send_whatsapp(from_, body)
+    if wa_message_id:
+        _remember_thread(conn, wa_message_id, result.meeting_id, from_)
+
+
+def _remember_thread(conn, wa_message_id: str, meeting_id: str, from_: str) -> None:
+    """So a reply to this readback can be routed back to its meeting."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "insert into whatsapp_threads (wa_message_id, meeting_id, sender_entity_id) "
+                "values (%s, %s, (select entity_id from whatsapp_senders "
+                r"                 where regexp_replace(phone, '\D', '', 'g') = %s)) "
+                "on conflict (wa_message_id) do nothing",
+                (wa_message_id, meeting_id, re.sub(r"\D", "", from_ or "")),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()  # a lost thread row costs reply-routing, never the meeting
+
+
+def _handle_audio(conn, from_, media_id, logged_by, base, *, reply_to: Optional[str]) -> None:
     audio_bytes, mime_type = download_media(media_id)
     suffix = _AUDIO_EXT.get(mime_type, ".ogg")
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -174,7 +244,7 @@ def _handle_audio(conn, from_, media_id, logged_by, base) -> None:
     if not transcript.strip():
         send_whatsapp(from_, "Got the voice note but couldn't make out any speech - try again?")
         return
-    _route_words(conn, from_, transcript, logged_by, base, audio_path=audio_path)
+    _route_words(conn, from_, transcript, logged_by, base, audio_path=audio_path, reply_to=reply_to)
 
 
 def _handle_photo(conn, from_, caption, media_id, logged_by, base) -> None:

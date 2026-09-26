@@ -20,6 +20,12 @@ dependencies = [
     "jinja2>=3.1",
     "python-multipart>=0.0.12",
 ]
+[dependency-groups]
+# Tests cover the pure logic only - formatting, budgets, phone normalisation,
+# PIN hashing. Those need no database and no model call, so the suite runs in
+# under a second and costs nothing against the Gemini daily quota.
+dev = ["pytest>=8.0"]
+
 # sentence-transformers (local MiniLM embeddings) deferred until step 3 shows
 # trigram + phonetic matching (jellyfish) actually misses matches it would catch —
 # see PLAN.md "Flags on the cost policy" #2. Add it here if/when we need it.
