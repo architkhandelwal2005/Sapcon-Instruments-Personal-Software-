@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.capture.pipeline import ingest_capture
 from app.db import get_connection, release_connection
+from app.web.auth import actor_of
 from app.web.templating import templates
 
 router = APIRouter()
@@ -26,6 +27,7 @@ def new_capture_form(request: Request, error: Optional[str] = None):
 
 @router.post("/captures/new")
 async def create_capture(
+    request: Request,
     capture_type: str = Form(...),
     captured_date: str = Form(...),
     photo: UploadFile = File(...),
@@ -42,12 +44,18 @@ async def create_capture(
         return RedirectResponse(f"/captures/new?error={quote('No photo uploaded')}", status_code=303)
     mime_type = photo.content_type or "image/jpeg"
 
+    actor = actor_of(request)
     conn = get_connection()
     try:
-        result = ingest_capture(conn, image_bytes, mime_type, capture_type, cdate)
+        result = ingest_capture(conn, image_bytes, mime_type, capture_type, cdate,
+                                logged_by=actor.entity_id)
     except Exception as exc:
         return RedirectResponse(f"/captures/new?error={quote(str(exc)[:200])}", status_code=303)
     finally:
         release_connection(conn)
 
+    # Review belongs to the office person; an employee is told it landed and
+    # sent back to their own work rather than bounced off a page they cannot open.
+    if actor.is_employee():
+        return RedirectResponse(f"/tasks?done={result.item_count}", status_code=303)
     return RedirectResponse(f"/review/capture/{result.capture_event_id}", status_code=303)

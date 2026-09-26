@@ -27,19 +27,34 @@ PUBLIC_PATHS = frozenset({
 
 PUBLIC_PREFIXES = ("/static/",)
 
-# Longest matching prefix wins, so "/meetings/new" can be more open than
-# "/meetings". Order here is for reading; matching sorts by length.
+# Two tables. EXACT wins over PREFIX, which lets one page differ from the ones
+# beneath it: the meeting log lists every customer visit and is staff-only,
+# while a single meeting is reachable by the employee who recorded it, decided
+# by a row check in the handler. Among prefixes, the longest match wins.
+POLICY_EXACT: dict[str, tuple[str, ...]] = {
+    "/": STAFF,             # the home page is a list of every meeting
+    "/meetings": STAFF,     # the meeting log, likewise
+}
+
 POLICY: dict[str, tuple[str, ...]] = {
-    "/": ALL,
+    # An employee gets their own work and the customers they reach through it.
     "/tasks": ALL,
     "/leads": ALL,
-    "/meetings": ALL,
-    "/meetings/new": ALL,
+    "/meetings": ALL,           # a single meeting; the log itself is EXACT above
     "/captures/new": ALL,
-    "/entities": ALL,
-    "/contacts": ALL,
-    "/ask": ALL,
-    "/review": ALL,
+    "/entities": ALL,           # a row check in the handler decides which ones
+
+    # The whole book and the relationship graph are the asset that leaves with
+    # someone who leaves.
+    "/contacts": STAFF,
+    "/review": STAFF,
+
+    # Free-text questions over partially-scoped retrieval is the easiest way to
+    # leak the whole book: one missed filter in one query and "summarise our
+    # biggest customers" answers it. Revisit when retrieval is scoped and
+    # audited end to end.
+    "/ask": STAFF,
+
     "/admin": OWNER,
 }
 
@@ -50,6 +65,8 @@ def is_public(path: str) -> bool:
 
 def allowed_roles(path: str) -> tuple[str, ...]:
     """The roles that may reach this path. Unlisted paths are owner-only."""
+    if path in POLICY_EXACT:
+        return POLICY_EXACT[path]
     best: tuple[str, ...] = OWNER
     best_len = -1
     for prefix, roles in POLICY.items():
@@ -73,7 +90,9 @@ def unlisted_paths(paths: Iterable[str]) -> list[str]:
     Used by scripts/audit_routes.py to catch a new route before it ships."""
     return sorted(
         p for p in paths
-        if not is_public(p) and not any(_matches(_concrete(p), prefix) for prefix in POLICY)
+        if not is_public(p)
+        and p not in POLICY_EXACT
+        and not any(_matches(_concrete(p), prefix) for prefix in POLICY)
     )
 
 

@@ -14,6 +14,7 @@ from app.review import (
     pending_summary,
     rejected_items,
 )
+from app.web.auth import actor_of
 from app.web.templating import templates
 
 router = APIRouter()
@@ -48,6 +49,7 @@ def review_meeting(request: Request, meeting_id: str, done: Optional[int] = None
 
 @router.post("/review/{meeting_id}/item")
 def review_item(
+    request: Request,
     meeting_id: str,
     kind: str = Form(...),
     item_id: str = Form(...),
@@ -70,6 +72,7 @@ def review_item(
             description=(description if description.strip() else None),
             role_tag=(role_tag.strip() or None),
             due_date=parsed_due,
+            actor_id=actor_of(request).entity_id,
         )
         remaining = [m for m in pending_summary(conn) if m["meeting_id"] == meeting_id]
     finally:
@@ -91,10 +94,11 @@ def review_capture(request: Request, capture_event_id: str, done: Optional[int] 
 
 
 @router.post("/review/capture/{capture_event_id}/item")
-def review_capture_item(capture_event_id: str, item_id: str = Form(...), decision: str = Form(...)):
+def review_capture_item(request: Request, capture_event_id: str, item_id: str = Form(...),
+                        decision: str = Form(...)):
     conn = get_connection()
     try:
-        apply_decision(conn, "entity", item_id, decision)
+        apply_decision(conn, "entity", item_id, decision, actor_id=actor_of(request).entity_id)
         remaining = capture_detail(conn, capture_event_id)
         still_pending = any(i["review_status"] == "pending" for i in remaining["entries"])
     finally:

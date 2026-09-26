@@ -1,13 +1,15 @@
 from typing import Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
 from app.db import get_connection, release_connection
 from app.ingestion.pipeline import append_correction
 from app.minutes.generate import fetch_meeting_minutes_data, generate_readback
 from app.web.helpers import save_and_transcribe, with_overdue_flags
+from app.web.auth import actor_of
+from app.web.authz import employee_can_see_meeting
 from app.web.templating import templates
 
 router = APIRouter()
@@ -57,8 +59,13 @@ def view_meeting(
     error: Optional[str] = None,
     flagged: Optional[str] = None,
 ):
+    actor = actor_of(request)
     conn = get_connection()
     try:
+        if actor.is_employee() and not employee_can_see_meeting(conn, actor, meeting_id):
+            # 404, not 403: whose meetings exist is itself information.
+            raise HTTPException(status_code=404, detail="No such meeting")
+
         data = fetch_meeting_minutes_data(conn, meeting_id)
     finally:
         release_connection(conn)
@@ -86,11 +93,14 @@ def view_meeting(
 
 
 @router.get("/meetings/{meeting_id}/readback", response_class=PlainTextResponse)
-def meeting_readback(meeting_id: str):
+def meeting_readback(request: Request, meeting_id: str):
     """The 'here's what I understood' plain-text recap - select-all, paste into
     a message. Same formatter the CLI prints."""
+    actor = actor_of(request)
     conn = get_connection()
     try:
+        if actor.is_employee() and not employee_can_see_meeting(conn, actor, meeting_id):
+            raise HTTPException(status_code=404, detail="No such meeting")
         return generate_readback(conn, meeting_id)
     finally:
         release_connection(conn)
@@ -98,10 +108,19 @@ def meeting_readback(meeting_id: str):
 
 @router.post("/meetings/{meeting_id}/correct")
 async def submit_correction(
+    request: Request,
     meeting_id: str,
     text: str = Form(default=""),
     audio: Optional[UploadFile] = File(default=None),
 ):
+    actor = actor_of(request)
+    conn = get_connection()
+    try:
+        if actor.is_employee() and not employee_can_see_meeting(conn, actor, meeting_id):
+            raise HTTPException(status_code=404, detail="No such meeting")
+    finally:
+        release_connection(conn)
+
     transcript = text.strip()
     audio_path = None
 

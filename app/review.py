@@ -298,10 +298,17 @@ def apply_decision(
     description: Optional[str] = None,
     role_tag: Optional[str] = None,
     due_date=None,
+    actor_id: Optional[str] = None,
+    note: Optional[str] = None,
 ) -> list[str]:
     """Confirm or reject one item, applying any edits passed alongside a
     confirm, then re-finalise every meeting the item touches. Returns the
-    affected meeting ids. Restoring a rejected item = confirm it again."""
+    affected meeting ids. Restoring a rejected item = confirm it again.
+
+    Every decision is also written to review_decisions. That table is
+    append-only, so a reject and a later restore both survive - which a pair of
+    columns on each table could not express. `actor_id` is None for scripts and
+    for anything decided before logins existed."""
     if kind not in _TABLE:
         raise ValueError(f"unknown kind {kind!r}")
     if decision not in ("confirm", "reject"):
@@ -359,6 +366,12 @@ def apply_decision(
                 "update entity_review_queue set resolved = true where entity_id = %s or possible_duplicate_of = %s",
                 (item_id, item_id),
             )
+
+        cur.execute(
+            "insert into review_decisions (kind, item_id, decision, decided_by, note) "
+            "values (%s, %s, %s, %s, %s)",
+            (kind, item_id, decision, actor_id, note),
+        )
 
     for m in meetings:
         finalise_meeting_status(conn, m)

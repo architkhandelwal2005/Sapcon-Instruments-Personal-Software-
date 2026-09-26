@@ -13,6 +13,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.db import get_connection, release_connection
 from app.minutes.generate import fetch_task_assignees
+from app.web.auth import actor_of
+from app.web.authz import employee_owns_task
 from app.web.templating import templates
 
 router = APIRouter()
@@ -26,7 +28,12 @@ def _employee_options(conn) -> list[dict]:
         return [{"id": str(i), "canonical_name": n} for i, n in cur.fetchall()]
 
 
-def _predicate(*, status, assigned_to) -> tuple[str, dict]:
+def _predicate(*, status, assigned_to, actor=None) -> tuple[str, dict]:
+    """An employee sees their own tasks, whatever the query string says - the
+    filter is forced rather than defaulted, so editing the URL changes
+    nothing."""
+    if actor is not None and actor.is_employee():
+        assigned_to = actor.entity_id
     where = ["t.review_status <> 'rejected'"]
     params: dict = {}
     if status:
@@ -46,7 +53,8 @@ def tasks_page(
     status: Optional[str] = "open",
     assigned_to: Optional[str] = None,
 ):
-    clause, params = _predicate(status=status, assigned_to=assigned_to)
+    actor = actor_of(request)
+    clause, params = _predicate(status=status, assigned_to=assigned_to, actor=actor)
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -75,11 +83,12 @@ def tasks_page(
             }
             for tid, desc, reid, rename, due, tstatus, review_status, confidence, mid in found
         ]
-        employees = _employee_options(conn)
+        employees = [] if actor.is_employee() else _employee_options(conn)
     finally:
         release_connection(conn)
 
-    active = {"status": status or "", "assigned_to": assigned_to or ""}
+    active = {"status": status or "",
+              "assigned_to": actor.entity_id if actor.is_employee() else (assigned_to or "")}
     return templates.TemplateResponse(
         request, "tasks.html",
         {"rows": rows, "employees": employees, "active": active},
@@ -87,11 +96,15 @@ def tasks_page(
 
 
 @router.post("/tasks/{task_id}/status")
-def update_task_status(task_id: str, status: str = Form(...), back: str = Form(default="/tasks")):
+def update_task_status(request: Request, task_id: str, status: str = Form(...),
+                       back: str = Form(default="/tasks")):
     if status not in ("open", "done"):
         return RedirectResponse(back, status_code=303)
+    actor = actor_of(request)
     conn = get_connection()
     try:
+        if actor.is_employee() and not employee_owns_task(conn, actor, task_id):
+            return RedirectResponse("/tasks?error=That+task+is+not+yours", status_code=303)
         with conn.cursor() as cur:
             cur.execute("update tasks set status = %s where id = %s", (status, task_id))
         conn.commit()

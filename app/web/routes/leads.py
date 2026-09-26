@@ -11,11 +11,13 @@ lead's entity, reusing fetch_interaction_history() as-is.
 from datetime import date, datetime
 from typing import Optional
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.db import get_connection, release_connection
 from app.web.routes.entities import fetch_entity, fetch_interaction_history
+from app.web.auth import actor_of
+from app.web.authz import employee_owns_lead
 from app.web.templating import templates
 
 router = APIRouter()
@@ -32,7 +34,11 @@ def _employee_options(conn) -> list[dict]:
         return [{"id": str(i), "canonical_name": n} for i, n in cur.fetchall()]
 
 
-def _predicate(*, status, assigned_to, source) -> tuple[str, dict]:
+def _predicate(*, status, assigned_to, source, actor=None) -> tuple[str, dict]:
+    """An employee sees the leads allotted to them, whatever the query string
+    says - forced, not defaulted, so editing the URL changes nothing."""
+    if actor is not None and actor.is_employee():
+        assigned_to = actor.entity_id
     where = ["1=1"]
     params: dict = {}
     if status:
@@ -95,18 +101,20 @@ def leads_page(
     assigned_to: Optional[str] = None,
     source: Optional[str] = None,
 ):
-    clause, params = _predicate(status=status, assigned_to=assigned_to, source=source)
+    actor = actor_of(request)
+    clause, params = _predicate(status=status, assigned_to=assigned_to, source=source, actor=actor)
     conn = get_connection()
     try:
         rows = _search(conn, clause, params)
-        employees = _employee_options(conn)
+        employees = [] if actor.is_employee() else _employee_options(conn)
         with conn.cursor() as cur:
             cur.execute("select distinct source from leads where source is not null order by source")
             sources = [r[0] for r in cur.fetchall()]
     finally:
         release_connection(conn)
 
-    active = {"status": status or "", "assigned_to": assigned_to or "", "source": source or ""}
+    active = {"status": status or "", "source": source or "",
+              "assigned_to": actor.entity_id if actor.is_employee() else (assigned_to or "")}
     return templates.TemplateResponse(
         request,
         "leads.html",
@@ -187,8 +195,13 @@ def create_lead(
 
 @router.get("/leads/{lead_id}", response_class=HTMLResponse)
 def lead_detail(request: Request, lead_id: str, done: Optional[int] = None):
+    actor = actor_of(request)
     conn = get_connection()
     try:
+        if actor.is_employee() and not employee_owns_lead(conn, actor, lead_id):
+            # 404, not 403: "this lead exists but is not yours" is itself a fact
+            # about who the company is talking to.
+            raise HTTPException(status_code=404, detail="No such lead")
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -208,8 +221,8 @@ def lead_detail(request: Request, lead_id: str, done: Optional[int] = None):
              next_follow_up_due, notes, created_at, status_changed_at, status_changed_by_name) = row
 
         entity = fetch_entity(conn, str(entity_id))
-        history = fetch_interaction_history(conn, str(entity_id))
-        employees = _employee_options(conn)
+        history = fetch_interaction_history(conn, str(entity_id), actor=actor)
+        employees = [] if actor.is_employee() else _employee_options(conn)
     finally:
         release_connection(conn)
 
@@ -228,6 +241,7 @@ def lead_detail(request: Request, lead_id: str, done: Optional[int] = None):
 
 @router.post("/leads/{lead_id}/status")
 def update_lead_status(
+    request: Request,
     lead_id: str,
     status: str = Form(...),
     changed_by: str = Form(default=""),
@@ -244,8 +258,11 @@ def update_lead_status(
         except ValueError:
             due = None
 
+    actor = actor_of(request)
     conn = get_connection()
     try:
+        if actor.is_employee() and not employee_owns_lead(conn, actor, lead_id):
+            return RedirectResponse("/leads?error=That+lead+is+not+yours", status_code=303)
         with conn.cursor() as cur:
             cur.execute(
                 "update leads set status = %s, status_changed_at = now(), status_changed_by = %s, "

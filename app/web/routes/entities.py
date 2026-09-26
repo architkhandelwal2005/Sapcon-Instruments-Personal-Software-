@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from app.db import get_connection, release_connection
@@ -7,6 +7,8 @@ from app.entity_resolution.review_queue import fetch_flags_for_entity
 from app.graph.entity_view import fetch_entity_connections
 from app.minutes.generate import TaskRow, fetch_meeting_minutes_data, fetch_task_assignees
 from app.web.helpers import with_overdue_flags
+from app.web.auth import actor_of
+from app.web.authz import employee_can_see_entity, visible_meeting_clause
 from app.web.templating import templates
 
 router = APIRouter()
@@ -29,7 +31,7 @@ def fetch_entity(conn, entity_id: str) -> dict:
         }
 
 
-def fetch_interaction_history(conn, entity_id: str) -> list[dict]:
+def fetch_interaction_history(conn, entity_id: str, *, actor=None) -> list[dict]:
     """Meetings that touch this entity via a relation OR a task - a task
     with no relation is still a real meeting, and open commitments must
     never be able to disagree with interaction history about whether one
@@ -39,15 +41,20 @@ def fetch_interaction_history(conn, entity_id: str) -> list[dict]:
     primary_contact of their own direct meetings) and a company (which
     only ever appears via relations/tasks, never as primary_contact
     itself). Also the activity history behind a lead's profile - who
-    logged each call, reused as-is via entity_id, no lead-specific query."""
+    logged each call, reused as-is via entity_id, no lead-specific query.
+
+    `actor` limits the history for an employee to meetings they recorded or
+    attended. Owning a lead does not make the owner's private notes from a
+    visit they were not on theirs to read."""
+    visible, visible_params = visible_meeting_clause(actor) if actor else ("true", {})
     with conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             select distinct m.id, m.meeting_date, pc.canonical_name, lb.canonical_name
             from meetings m
             left join entities pc on pc.id = m.primary_contact_id
             left join entities lb on lb.id = m.logged_by
-            where m.id in (
+            where {visible} and m.id in (
                 select meeting_id from relations
                 where (source_id = %(entity_id)s or target_id = %(entity_id)s)
                   and status = 'active' and review_status <> 'rejected'
@@ -56,7 +63,7 @@ def fetch_interaction_history(conn, entity_id: str) -> list[dict]:
             )
             order by m.meeting_date desc
             """,
-            {"entity_id": entity_id},
+            {"entity_id": entity_id, **visible_params},
         )
         return [
             {"id": str(mid), "meeting_date": meeting_date, "primary_contact_name": pc_name, "logged_by_name": lb_name}
@@ -90,10 +97,14 @@ def _fetch_open_commitments(conn, entity_id: str) -> list[dict]:
 
 @router.get("/entities/{entity_id}", response_class=HTMLResponse)
 def view_entity(request: Request, entity_id: str):
+    actor = actor_of(request)
     conn = get_connection()
     try:
+        if actor.is_employee() and not employee_can_see_entity(conn, actor, entity_id):
+            # 404 rather than 403: which customers exist is itself the asset.
+            raise HTTPException(status_code=404, detail="No such contact")
         entity = fetch_entity(conn, entity_id)
-        history = fetch_interaction_history(conn, entity_id)
+        history = fetch_interaction_history(conn, entity_id, actor=actor)
         commitments = _fetch_open_commitments(conn, entity_id)
         connections = fetch_entity_connections(conn, entity_id)
         review_flags = fetch_flags_for_entity(conn, entity_id)
@@ -120,7 +131,14 @@ def view_contour(request: Request, entity_id: str):
     """Grouped list/table by relation type - not a visual graph, per
     instruction. Reuses the same fetch_entity_connections() as the
     profile's condensed view, just grouped rather than flat, so the two
-    screens can never disagree about what's connected."""
+    screens can never disagree about what's connected.
+
+    Staff only: this is the relationship map - who introduces whom, which
+    consultant sits behind which order - and is the most concentrated form of
+    the thing that leaves with someone who leaves."""
+    actor = actor_of(request)
+    if actor.is_employee():
+        raise HTTPException(status_code=404, detail="No such page")
     conn = get_connection()
     try:
         entity = fetch_entity(conn, entity_id)

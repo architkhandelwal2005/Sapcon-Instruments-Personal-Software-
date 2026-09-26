@@ -6,6 +6,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.db import get_connection, release_connection
 from app.review import finalise_meeting_status
+from app.web.auth import actor_of
 from app.web.templating import templates
 
 router = APIRouter()
@@ -124,6 +125,7 @@ def contacts_page(
 
 @router.post("/contacts/confirm")
 def bulk_confirm(
+    request: Request,
     q: str = Form(default=""),
     type: str = Form(default=""),
     region: str = Form(default=""),
@@ -133,6 +135,7 @@ def bulk_confirm(
     """Confirm every pending contact matching the current filter, plus their
     'employer' relations - how the office boy clears the seeded import once
     they have eyeballed a slice of it."""
+    actor = actor_of(request)
     clause, params = _predicate(
         q=q.strip(), etype=(type or None), region=(region or None), role=(role or None), source=(source or None)
     )
@@ -156,6 +159,13 @@ def bulk_confirm(
                     (confirmed_ids, confirmed_ids),
                 )
                 affected_meetings = [r[0] for r in cur.fetchall()]
+                # One audit row per contact. A thousand rows from one click is
+                # the record worth having: who confirmed that import, and when.
+                cur.executemany(
+                    "insert into review_decisions (kind, item_id, decision, decided_by, note) "
+                    "values ('entity', %s, 'confirm', %s, 'bulk confirm from /contacts')",
+                    [(eid, actor.entity_id) for eid in confirmed_ids],
+                )
             else:
                 affected_meetings = []
         for m in affected_meetings:
