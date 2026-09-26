@@ -116,4 +116,51 @@ def resolve_mentions(conn: psycopg.Connection, question: str) -> list[tuple[str,
             continue
         chosen.append((str(eid), name))
         claimed_names.append(name)
+
+    if not chosen:
+        chosen = _resolve_first_names(conn, question)
     return chosen
+
+
+# People are called by one name in speech - "tell Vishal to call him", "what is
+# pending with Saurabh" - while the roster holds "Vishal Dixit". Matching only
+# whole names meant those questions resolved to nobody.
+_MIN_FIRST_NAME = 4
+
+
+def _resolve_first_names(conn: psycopg.Connection, question: str) -> list[tuple[str, str]]:
+    """Entities identified by a single name part.
+
+    Staff first: "tell Vishal to call him" means the Vishal on the roster, even
+    though six customers called Vishal have come in from visiting cards - the
+    team is a closed set of thirty people he names constantly, and a customer is
+    normally named in full ("Vishal Rabari"), which the whole-name pass catches
+    before this one runs.
+
+    Outside the roster the name must be unique: two customers called Vishal
+    means neither is chosen, and the question is answered from the wider
+    material rather than from a guess about which one was meant."""
+    for entity_types in (("employee",), ("person",)):
+        with conn.cursor() as cur:
+            cur.execute(
+                r"""
+                with parts as (
+                    select id, canonical_name, lower(part) as part
+                    from entities, unnest(string_to_array(canonical_name, ' ')) as part
+                    where review_status <> 'rejected'
+                      and entity_type = any(%(types)s)
+                      and length(part) >= %(min_len)s
+                ),
+                unique_parts as (
+                    select part from parts group by part having count(distinct id) = 1
+                )
+                select distinct p.id, p.canonical_name
+                from parts p join unique_parts u on u.part = p.part
+                where %(q)s ~* ('\y' || regexp_replace(p.part, '([.^$*+?()\[\]{}|\-])', '\', 'g') || '\y')
+                """,
+                {"q": question, "min_len": _MIN_FIRST_NAME, "types": list(entity_types)},
+            )
+            found = [(str(eid), name) for eid, name in cur.fetchall()]
+        if found:
+            return found
+    return []

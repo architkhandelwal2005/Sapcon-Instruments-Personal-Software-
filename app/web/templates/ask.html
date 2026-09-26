@@ -21,25 +21,40 @@
   {% if answer.citations %}
     <h2>Sources</h2>
     {% if answer.ungrounded_citations %}
-      <p class="meta quote missing">{{ answer.ungrounded_citations }} of {{ answer.citations|length }} quotes could not be matched to a transcript - treat those points with care.</p>
+      <p class="meta quote missing">{{ answer.ungrounded_citations }} of {{ answer.citations|length }} source(s) could not be checked - treat those points with care.</p>
     {% endif %}
     <div class="card">
       <ol class="citation-list">
         {% for c in answer.citations %}
           <li>
-            <div class="quote{% if not c.grounded %} missing{% endif %}">&ldquo;{{ c.quote }}&rdquo;</div>
-            <div class="meta">
-              [{{ c.note_index }}]
-              <a class="entity-link" href="/meetings/{{ c.meeting_id }}">{{ c.meeting_date }}</a>
-              {% if not c.grounded %} &middot; <strong>not found verbatim</strong>{% endif %}
-            </div>
+            {% if c.source == "record" %}
+              {# A record is the system's own row: shown as what it says, never
+                 as a quotation, because quoting ourselves proves nothing. #}
+              <div class="quote{% if not c.grounded %} missing{% endif %}">{{ c.fact_text or c.fact_ref }}</div>
+              <div class="meta">
+                {% if c.url_path %}<a class="entity-link" href="{{ c.url_path }}">open the record</a>{% endif %}
+                {% if not c.grounded %} &middot; <strong>no such record - treat as unsupported</strong>{% endif %}
+              </div>
+            {% else %}
+              <div class="quote{% if not c.grounded %} missing{% endif %}">&ldquo;{{ c.quote }}&rdquo;</div>
+              <div class="meta">
+                [{{ c.note_index }}]
+                <a class="entity-link" href="/meetings/{{ c.meeting_id }}">{{ c.meeting_date }}</a>
+                {% if not c.grounded %} &middot; <strong>not found verbatim</strong>{% endif %}
+              </div>
+            {% endif %}
           </li>
         {% endfor %}
       </ol>
     </div>
   {% endif %}
 
-  <p class="meta">Synthesised from {{ answer.notes_used }} meeting note{{ "s" if answer.notes_used != 1 else "" }}.</p>
+  <p class="meta">
+    Read from {{ answer.notes_used }} meeting note{{ "s" if answer.notes_used != 1 else "" }}
+    {%- if answer.facts_used %} and {{ answer.facts_used }} record{{ "s" if answer.facts_used != 1 else "" }}{% endif %}.
+    {%- if answer.notes_summary_only %} {{ answer.notes_summary_only }} note(s) were too long to read in full - only their summaries were used.{% endif %}
+    {%- if answer.notes_dropped %} {{ answer.notes_dropped }} older note(s) did not fit.{% endif %}
+  </p>
 {% elif not heading %}
   <p class="empty">Ask about a contact, or how two of them are connected.</p>
 {% endif %}
