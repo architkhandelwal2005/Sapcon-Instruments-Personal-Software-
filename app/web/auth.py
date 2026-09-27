@@ -30,7 +30,11 @@ from fastapi import Request
 from app.phone import normalize_phone
 
 COOKIE_NAME = "sapcon_session"
-SESSION_DAYS = 90
+# A session ends when someone signs out or their PIN is reset - never on a
+# timer. The uncle is on the road and a login that quietly expired would mean
+# hunting for a PIN he types a handful of times a year. The column stays, so
+# revoking a single session is still one delete.
+SESSION_DAYS = 3650
 REFRESH_AFTER_HOURS = 24        # don't write to the session row on every request
 MIN_PIN_LENGTH = 6              # 4 digits is 10,000 guesses against a public URL
 MAX_FAILED = 5

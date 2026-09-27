@@ -115,7 +115,8 @@ def enrol_code(entity_id: str):
 @router.post("/admin/users/{entity_id}/disabled")
 def set_disabled(entity_id: str, disabled: str = Form(...)):
     """Turning someone off also ends their open sessions - otherwise a live
-    cookie keeps working for up to 90 days."""
+    cookie keeps working indefinitely, since sessions no longer expire on
+    their own."""
     off = disabled == "1"
     conn = get_connection()
     try:
