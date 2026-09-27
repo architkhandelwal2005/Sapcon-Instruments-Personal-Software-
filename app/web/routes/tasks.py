@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from app.db import get_connection, release_connection
 from app.minutes.generate import fetch_task_assignees
 from app.web.auth import actor_of
+from app.commands.apply import assign_task_to
 from app.web.authz import employee_owns_task
 from app.web.templating import templates
 
@@ -108,6 +109,37 @@ def update_task_status(request: Request, task_id: str, status: str = Form(...),
         with conn.cursor() as cur:
             cur.execute("update tasks set status = %s where id = %s", (status, task_id))
         conn.commit()
+    finally:
+        release_connection(conn)
+    return RedirectResponse(back, status_code=303)
+
+
+@router.post("/tasks/{task_id}/assign")
+def reassign_task(request: Request, task_id: str, employee_id: str = Form(...),
+                  back: str = Form(default="/tasks")):
+    """Hand a task to someone, or take its owner off. Staff only: an employee
+    sees only their own tasks, and passing work to someone else is not theirs
+    to decide."""
+    actor = actor_of(request)
+    if actor.is_employee():
+        return RedirectResponse("/tasks?error=Only+the+office+can+reassign+work", status_code=303)
+    if not employee_id:
+        return RedirectResponse(back, status_code=303)
+
+    conn = get_connection()
+    try:
+        if employee_id == "none":
+            with conn.cursor() as cur:
+                cur.execute("delete from task_assignees where task_id = %s", (task_id,))
+            conn.commit()
+        else:
+            with conn.cursor() as cur:
+                cur.execute("select canonical_name from entities where id = %s", (employee_id,))
+                row = cur.fetchone()
+            conn.rollback()
+            if row is None:
+                return RedirectResponse(back, status_code=303)
+            assign_task_to(conn, task_id, employee_id, row[0], "")
     finally:
         release_connection(conn)
     return RedirectResponse(back, status_code=303)

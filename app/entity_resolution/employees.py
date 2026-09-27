@@ -59,3 +59,46 @@ def match_employee(conn: psycopg.Connection, name: Optional[str]) -> Optional[st
     ):
         return candidates[0].id
     return None
+
+
+def find_employee_by_spoken_name(
+    conn: psycopg.Connection, name: Optional[str]
+) -> Optional[tuple[str, str]]:
+    """(entity_id, canonical_name) for a name said out loud, or None.
+
+    `match_employee` deliberately refuses a bare first name: it decides who an
+    extracted task belongs to, and a stray "Sumit" in a recap may be anyone. An
+    instruction is different - "assign it to Vishal" is addressed to the roster,
+    and getting no match means the instruction silently does nothing.
+
+    So a first name is accepted here, but only when exactly one person on the
+    roster answers to it. Two Vishals on the team means neither is chosen.
+    """
+    cleaned = re.sub(r"\s*\(also written:.*\)\s*$", "", name or "").strip()
+    if not cleaned:
+        return None
+
+    exact = match_employee(conn, cleaned)
+    if exact:
+        with conn.cursor() as cur:
+            cur.execute("select canonical_name from entities where id = %s", (exact,))
+            row = cur.fetchone()
+        return (exact, row[0]) if row else None
+
+    if len(cleaned.split()) != 1 or len(cleaned) < 3:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select id, canonical_name from entities
+            where entity_type = 'employee' and review_status <> 'rejected'
+              and lower(%(n)s) = any (
+                  select lower(part) from unnest(string_to_array(canonical_name, ' ')) as part
+              )
+            """,
+            {"n": cleaned},
+        )
+        found = cur.fetchall()
+    if len(found) == 1:
+        return str(found[0][0]), found[0][1]
+    return None

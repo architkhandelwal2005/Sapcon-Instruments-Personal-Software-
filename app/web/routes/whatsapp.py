@@ -28,6 +28,18 @@ from app.llm import transcribe_audio
 from app.phone import DEFAULT_CC, normalize_phone
 from app.query import ask as run_ask
 from app.whatsapp.client import download_media, send_whatsapp, valid_signature
+from app.commands import parse_command
+from app.whatsapp.commands import (
+    apply_choice,
+    apply_command,
+    choice_payload,
+    command_reply,
+    is_undo,
+    parse_choice,
+    pending_for,
+    remember,
+    undo_command,
+)
 from app.whatsapp.intent import is_question
 from app.minutes.generate import fetch_meeting_minutes_data
 from app.whatsapp.readback import meeting_readback_reply
@@ -175,6 +187,10 @@ def _route_words(conn, from_, text: str, logged_by, base, *, audio_path, reply_t
     if meeting_id is not None:
         _apply_correction(conn, from_, text, meeting_id, logged_by, base, audio_path=audio_path)
         return
+    if _handle_reply_to_pending(conn, from_, text, base, reply_to):
+        return
+    if _handle_command(conn, from_, text, base):
+        return
     if _is_lookup(text):
         _handle_ask(conn, from_, _strip_ask(text) if text.lower().startswith(_ASK_PREFIX) else text)
         return
@@ -184,6 +200,54 @@ def _route_words(conn, from_, text: str, logged_by, base, *, audio_path, reply_t
         exc.note_was_saved = True  # ingest_new_meeting recorded it for a retry
         raise
     _send_readback(conn, from_, result, base)
+
+
+def _handle_reply_to_pending(conn, from_, text: str, base, reply_to: Optional[str]) -> bool:
+    """A reply to something the bot is waiting on: a number picking one of the
+    tasks it offered, or "undo" on a change it just made. Returns whether this
+    message was one of those."""
+    pending = pending_for(conn, reply_to)
+    if pending is None:
+        return False
+
+    if pending["kind"] == "undo" and is_undo(text):
+        outcome = undo_command(conn, pending["payload"]["token"])
+        send_whatsapp(from_, command_reply(outcome, base))
+        return True
+
+    if pending["kind"] == "choice":
+        candidates = pending["payload"]["candidates"]
+        index = parse_choice(text, len(candidates))
+        if index is None:
+            return False  # not a number - treat it as a fresh message
+        outcome = apply_choice(conn, pending["payload"], index)
+        _send_command_outcome(conn, from_, outcome, base)
+        return True
+    return False
+
+
+def _handle_command(conn, from_, text: str, base) -> bool:
+    """An instruction to change something that already exists. Returns whether
+    the message was one - anything else falls through to being logged or
+    answered, so a note is never swallowed by a failed command."""
+    command = parse_command(text)
+    if command is None:
+        return False
+    outcome = apply_command(conn, command)
+    _send_command_outcome(conn, from_, outcome, base, command=command)
+    return True
+
+
+def _send_command_outcome(conn, from_, outcome, base, *, command=None) -> None:
+    """Send the result, and remember what the reply to it would mean - a number
+    when choices were offered, "undo" when something changed."""
+    wa_message_id = send_whatsapp(from_, command_reply(outcome, base))
+    if not wa_message_id:
+        return
+    if outcome.status == "ambiguous" and command is not None:
+        remember(conn, wa_message_id, from_, "choice", choice_payload(command, outcome))
+    elif outcome.status == "applied" and outcome.undo_token:
+        remember(conn, wa_message_id, from_, "undo", {"token": outcome.undo_token})
 
 
 def _apply_correction(conn, from_, text, meeting_id, logged_by, base, *, audio_path) -> None:

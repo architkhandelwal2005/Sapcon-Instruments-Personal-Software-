@@ -40,6 +40,20 @@
               {% for a in t.assignees %}
                 <div>{{ a.name }}{% if not a.employee_id %} <span class="badge badge-pending">not on roster</span>{% endif %}</div>
               {% else %}unassigned{% endfor %}
+              {# Staff can hand a task to someone here; an employee sees only
+                 their own tasks and cannot pass work to anybody else. #}
+              {% if employees %}
+                <form method="post" action="/tasks/{{ t.id }}/assign" class="assign-form">
+                  <input type="hidden" name="back" value="/tasks?status={{ active.status }}&assigned_to={{ active.assigned_to }}">
+                  <select name="employee_id" onchange="this.form.submit()">
+                    <option value="">reassign&hellip;</option>
+                    <option value="none">nobody</option>
+                    {% for e in employees %}
+                      <option value="{{ e.id }}">{{ e.canonical_name }}</option>
+                    {% endfor %}
+                  </select>
+                </form>
+              {% endif %}
             </td>
             <td>{{ t.due_date or "" }} {% if t.overdue %}<span class="badge badge-pending">overdue</span>{% endif %}</td>
             <td><span class="badge {% if t.status == 'done' %}badge-direct{% else %}badge-tag{% endif %}">{{ t.status }}</span></td>
