@@ -1,7 +1,12 @@
-"""Signing in, signing out, and setting a first PIN.
+"""Signing in, signing out, and choosing a first PIN.
 
 These are the only pages reachable without a session, so they are deliberately
 small: a phone number, a PIN, and nothing that reads customer data.
+
+There is one door. Everyone types their phone number and their PIN at /login;
+somebody signing in for the first time is sent on to choose one, with the
+number they just typed carried across. Nobody has to be told which page to
+start on, and nobody needs a code from anyone else.
 """
 
 from urllib.parse import quote
@@ -15,7 +20,7 @@ from app.web.auth import (
     MIN_PIN_LENGTH,
     SESSION_DAYS,
     authenticate,
-    complete_enrolment,
+    claim_account,
     end_session,
     new_session,
 )
@@ -26,10 +31,10 @@ router = APIRouter()
 _MESSAGES = {
     "bad": "That phone number and PIN don't match.",
     "locked": "Too many wrong tries. Try again in a few minutes.",
-    "not_enrolled": "This number has no PIN yet - ask for a setup code.",
     "disabled": "This account has been turned off.",
     "weak_pin": f"Choose a PIN of at least {MIN_PIN_LENGTH} digits.",
-    "enrolled": "PIN set. Signed in.",
+    "mismatch": "The two PINs were different. Try again.",
+    "already_set": "This number already has a PIN. Sign in with it, or ask for a reset.",
 }
 
 
@@ -63,6 +68,11 @@ def login_submit(request: Request, phone: str = Form(...), pin: str = Form(...),
     conn = get_connection()
     try:
         actor, reason = authenticate(conn, phone, pin)
+        if reason == "no_pin_yet":
+            # First time on a number the owner registered: let them set the PIN
+            # they just typed, rather than bouncing them to find another page.
+            return RedirectResponse(
+                f"/enrol?phone={quote(phone.strip())}&next={quote(target)}", status_code=303)
         if actor is None:
             return RedirectResponse(f"/login?next={quote(target)}&error={reason}", status_code=303)
         token = new_session(conn, actor.entity_id, request.headers.get("user-agent", ""))
@@ -84,23 +94,30 @@ def logout(request: Request):
 
 
 @router.get("/enrol", response_class=HTMLResponse)
-def enrol_form(request: Request, error: str = ""):
+def enrol_form(request: Request, error: str = "", phone: str = "", next: str = "/"):
     return templates.TemplateResponse(
-        request, "enrol.html", {"message": _MESSAGES.get(error, ""), "min_pin": MIN_PIN_LENGTH},
+        request, "enrol.html",
+        {"message": _MESSAGES.get(error, ""), "min_pin": MIN_PIN_LENGTH,
+         "phone": phone, "next": _safe_next(next)},
     )
 
 
 @router.post("/enrol")
-def enrol_submit(request: Request, phone: str = Form(...), code: str = Form(...),
-                 pin: str = Form(...), pin_again: str = Form(...)):
+def enrol_submit(request: Request, phone: str = Form(...), pin: str = Form(...),
+                 pin_again: str = Form(...), next: str = Form(default="/")):
+    target = _safe_next(next)
+    back = f"/enrol?phone={quote(phone.strip())}&next={quote(target)}"
     if pin != pin_again:
-        return RedirectResponse("/enrol?error=bad", status_code=303)
+        return RedirectResponse(f"{back}&error=mismatch", status_code=303)
     conn = get_connection()
     try:
-        actor, reason = complete_enrolment(conn, phone, code, pin)
+        actor, reason = claim_account(conn, phone, pin)
         if actor is None:
-            return RedirectResponse(f"/enrol?error={reason}", status_code=303)
+            if reason == "already_set":
+                return RedirectResponse(
+                    f"/login?next={quote(target)}&error=already_set", status_code=303)
+            return RedirectResponse(f"{back}&error={reason}", status_code=303)
         token = new_session(conn, actor.entity_id, request.headers.get("user-agent", ""))
     finally:
         release_connection(conn)
-    return _set_cookie(RedirectResponse("/tasks", status_code=303), token)
+    return _set_cookie(RedirectResponse(target, status_code=303), token)

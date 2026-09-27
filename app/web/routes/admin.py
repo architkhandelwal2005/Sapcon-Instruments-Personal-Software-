@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.db import get_connection, release_connection
 from app.phone import normalize_phone
-from app.web.auth import ROLES, end_all_sessions, issue_enrol_code
+from app.web.auth import ROLES, clear_pin, end_all_sessions
 from app.web.templating import templates
 
 router = APIRouter()
@@ -23,7 +23,6 @@ def _users(conn) -> list[dict]:
             """
             select u.entity_id, e.canonical_name, u.phone_digits, u.role,
                    u.pin_hash is not null, u.disabled, u.last_login_at,
-                   u.enrol_expires_at > now(),
                    (select count(*) from app_sessions s where s.entity_id = u.entity_id
                                                          and s.expires_at > now())
             from app_users u join entities e on e.id = u.entity_id
@@ -33,7 +32,7 @@ def _users(conn) -> list[dict]:
         rows = cur.fetchall()
     return [
         {"entity_id": str(r[0]), "name": r[1], "phone": r[2], "role": r[3], "has_pin": r[4],
-         "disabled": r[5], "last_login_at": r[6], "code_pending": bool(r[7]), "sessions": r[8]}
+         "disabled": r[5], "last_login_at": r[6], "sessions": r[7]}
         for r in rows
     ]
 
@@ -55,12 +54,11 @@ def _candidates(conn) -> list[dict]:
 
 
 @router.get("/admin/users", response_class=HTMLResponse)
-def admin_users(request: Request, code: str = "", code_for: str = "", error: str = ""):
+def admin_users(request: Request, error: str = ""):
     conn = get_connection()
     try:
         context = {"users": _users(conn), "candidates": _candidates(conn), "roles": ROLES,
-                   "issued_code": code, "issued_for": code_for, "error": error,
-                   "actor": request.state.actor}
+                   "error": error, "actor": request.state.actor}
     finally:
         release_connection(conn)
     return templates.TemplateResponse(request, "admin_users.html", context)
@@ -96,20 +94,16 @@ def add_user(entity_id: str = Form(...), phone: str = Form(...), role: str = For
     return RedirectResponse("/admin/users", status_code=303)
 
 
-@router.post("/admin/users/{entity_id}/enrol-code")
-def enrol_code(entity_id: str):
-    """Issue a setup code. Shown once, on the page it redirects to."""
+@router.post("/admin/users/{entity_id}/reset-pin")
+def reset_pin(entity_id: str):
+    """Forget their PIN and sign them out. They choose a new one themselves the
+    next time they sign in, so nobody but the person ever knows their PIN."""
     conn = get_connection()
     try:
-        code = issue_enrol_code(conn, entity_id)
-        with conn.cursor() as cur:
-            cur.execute("select canonical_name from entities where id = %s", (entity_id,))
-            row = cur.fetchone()
-        conn.rollback()
+        clear_pin(conn, entity_id)
     finally:
         release_connection(conn)
-    who = row[0] if row else ""
-    return RedirectResponse(f"/admin/users?code={code}&code_for={who}", status_code=303)
+    return RedirectResponse("/admin/users", status_code=303)
 
 
 @router.post("/admin/users/{entity_id}/disabled")

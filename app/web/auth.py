@@ -39,7 +39,6 @@ REFRESH_AFTER_HOURS = 24        # don't write to the session row on every reques
 MIN_PIN_LENGTH = 6              # 4 digits is 10,000 guesses against a public URL
 MAX_FAILED = 5
 LOCKOUT_MINUTES = 15
-ENROL_CODE_HOURS = 48
 
 ROLES = ("owner", "office", "employee")
 
@@ -189,7 +188,7 @@ def end_all_sessions(conn: psycopg.Connection, entity_id: str) -> None:
 
 
 def authenticate(conn: psycopg.Connection, phone: str, pin: str) -> tuple[Optional[Actor], str]:
-    """(actor, reason). reason is one of '', 'bad', 'locked', 'not_enrolled',
+    """(actor, reason). reason is one of '', 'bad', 'locked', 'no_pin_yet',
     'disabled'. Counts failures and locks the account for a while, because a
     6-digit PIN on a public address is guessable otherwise."""
     try:
@@ -223,7 +222,7 @@ def authenticate(conn: psycopg.Connection, phone: str, pin: str) -> tuple[Option
             return None, "locked"
         if not pin_hash:
             conn.rollback()
-            return None, "not_enrolled"
+            return None, "no_pin_yet"
 
         if not verify_pin(pin, pin_hash):
             failed += 1
@@ -245,28 +244,27 @@ def authenticate(conn: psycopg.Connection, phone: str, pin: str) -> tuple[Option
 
 
 # --------------------------------------------------------------------------
-# Enrolment - how someone gets their first PIN
+# First PIN
 #
-# There is no channel to send a code on, so the owner issues one and passes it
-# to the person himself. "First login with no PIN sets one" would be account
-# takeover for anyone who knows an employee's phone number.
+# There is no channel to send a one-time code on - the Meta test number reaches
+# five phones, not a whole team - so a code would have to be read out by the
+# owner and typed in by the employee, and in practice that means the owner is
+# the help desk for every new joiner and every forgotten PIN.
+#
+# So an account is claimed instead: the first person to sign in with a number
+# the owner has registered chooses the PIN for it. The window is the gap
+# between the owner creating the row and the employee's first sign-in, it is
+# visible on /admin/users as "not set yet", and it shuts permanently the moment
+# a PIN exists. Re-opening it is an owner action (Reset PIN), never automatic.
 
 
-def issue_enrol_code(conn: psycopg.Connection, entity_id: str) -> str:
-    """Returns the code in plain text exactly once; only its hash is kept."""
-    code = secrets.token_urlsafe(6)[:8].upper()
-    with conn.cursor() as cur:
-        cur.execute(
-            "update app_users set enrol_code_hash = %s, enrol_expires_at = %s where entity_id = %s",
-            (_token_hash(code), _now() + timedelta(hours=ENROL_CODE_HOURS), entity_id),
-        )
-    conn.commit()
-    return code
+def claim_account(conn: psycopg.Connection, phone: str, pin: str) -> tuple[Optional[Actor], str]:
+    """Set the first PIN for a registered number that has none.
 
-
-def complete_enrolment(conn: psycopg.Connection, phone: str, code: str, pin: str) -> tuple[Optional[Actor], str]:
-    """Consumes the code and sets the PIN. (actor, reason); reason is one of
-    '', 'bad', 'weak_pin'."""
+    Refuses an account that already has a PIN, so this can never overwrite a
+    working login - a forgotten PIN has to go back through the owner.
+    (actor, reason); reason is one of '', 'bad', 'weak_pin', 'disabled',
+    'already_set'."""
     try:
         _check_pin_shape(pin)
     except ValueError:
@@ -279,9 +277,9 @@ def complete_enrolment(conn: psycopg.Connection, phone: str, code: str, pin: str
     with conn.cursor() as cur:
         cur.execute(
             """
-            select u.entity_id, e.canonical_name, u.role, u.enrol_code_hash, u.enrol_expires_at
+            select u.entity_id, e.canonical_name, u.role, u.pin_hash, u.disabled
             from app_users u join entities e on e.id = u.entity_id
-            where u.phone_digits = %s and not u.disabled
+            where u.phone_digits = %s
             """,
             (digits,),
         )
@@ -290,21 +288,35 @@ def complete_enrolment(conn: psycopg.Connection, phone: str, code: str, pin: str
             conn.rollback()
             _burn_time()
             return None, "bad"
-        entity_id, name, role, code_hash, expires = row
-        if not code_hash or expires is None or expires <= _now():
+        entity_id, name, role, pin_hash, disabled = row
+        if disabled:
             conn.rollback()
-            return None, "bad"
-        if not hmac.compare_digest(code_hash, _token_hash((code or "").strip().upper())):
+            return None, "disabled"
+        if pin_hash:
             conn.rollback()
-            return None, "bad"
+            return None, "already_set"
 
         cur.execute(
-            "update app_users set pin_hash = %s, pin_set_at = now(), enrol_code_hash = null, "
-            "enrol_expires_at = null, failed_attempts = 0, locked_until = null where entity_id = %s",
+            "update app_users set pin_hash = %s, pin_set_at = now(), "
+            "failed_attempts = 0, locked_until = null where entity_id = %s",
             (hash_pin(pin), entity_id),
         )
     conn.commit()
     return Actor(entity_id=str(entity_id), name=name, role=role), ""
+
+
+def clear_pin(conn: psycopg.Connection, entity_id: str) -> None:
+    """Forget someone's PIN so they choose a new one next time they sign in,
+    and sign them out everywhere. This is what "Reset PIN" does - the owner
+    never learns, or chooses, anybody's PIN."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "update app_users set pin_hash = null, pin_set_at = null, "
+            "failed_attempts = 0, locked_until = null where entity_id = %s",
+            (entity_id,),
+        )
+    conn.commit()
+    end_all_sessions(conn, entity_id)
 
 
 def set_pin(conn: psycopg.Connection, entity_id: str, pin: str) -> None:

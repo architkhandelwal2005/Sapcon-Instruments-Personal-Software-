@@ -5,13 +5,9 @@
 
 {% if error %}<p class="flash">{{ error }}</p>{% endif %}
 
-{% if issued_code %}
-<p class="flash">
-  Setup code for <strong>{{ issued_for }}</strong>: <code>{{ issued_code }}</code><br>
-  <span class="muted">Shown once. Read it to them, then they set their own PIN at /enrol.
-  It expires in two days.</span>
-</p>
-{% endif %}
+<p class="muted">Add someone here, tell them the site address, and they sign in with
+their phone number and a PIN they choose themselves. Nobody needs a code, and nobody
+but the person ever knows their PIN.</p>
 
 <table class="listing">
   <thead>
@@ -23,13 +19,15 @@
       <td>{{ u.name }}{% if u.disabled %} (off){% endif %}</td>
       <td>{{ u.phone }}</td>
       <td>{{ u.role }}</td>
-      <td>{% if u.has_pin %}set{% elif u.code_pending %}code issued{% else %}none{% endif %}</td>
+      <td>{% if u.has_pin %}set{% else %}not set yet{% endif %}</td>
       <td>{{ u.sessions }}</td>
       <td>{{ u.last_login_at.strftime('%d %b %Y') if u.last_login_at else '-' }}</td>
       <td class="actions">
-        <form method="post" action="/admin/users/{{ u.entity_id }}/enrol-code">
-          <button type="submit">{% if u.has_pin %}Reset PIN{% else %}Issue code{% endif %}</button>
+        {% if u.has_pin %}
+        <form method="post" action="/admin/users/{{ u.entity_id }}/reset-pin">
+          <button type="submit">Reset PIN</button>
         </form>
+        {% endif %}
         <form method="post" action="/admin/users/{{ u.entity_id }}/disabled">
           <input type="hidden" name="disabled" value="{{ '0' if u.disabled else '1' }}">
           <button type="submit">{{ 'Turn on' if u.disabled else 'Turn off' }}</button>
