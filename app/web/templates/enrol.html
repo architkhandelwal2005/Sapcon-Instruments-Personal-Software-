@@ -1,10 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Choose your PIN - Sapcon CRM{% endblock %}
+{% block title %}New registration - Sapcon CRM{% endblock %}
 {% block main_class %}narrow{% endblock %}
 {% block content %}
-<h1>Choose your PIN</h1>
-<p class="muted">First time signing in. Pick a PIN of {{ min_pin }} digits or more
-and remember it - you will use it every time from now on.</p>
+<h1>New registration</h1>
+<p class="muted">Use the phone number the office has for you, and pick a PIN of
+{{ min_pin }} digits or more. You will use that number and PIN every time from
+now on, so choose something you will remember.</p>
 
 {% if message %}<p class="flash">{{ message }}</p>{% endif %}
 

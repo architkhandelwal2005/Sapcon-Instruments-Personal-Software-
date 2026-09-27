@@ -264,7 +264,7 @@ def claim_account(conn: psycopg.Connection, phone: str, pin: str) -> tuple[Optio
     Refuses an account that already has a PIN, so this can never overwrite a
     working login - a forgotten PIN has to go back through the owner.
     (actor, reason); reason is one of '', 'bad', 'weak_pin', 'disabled',
-    'already_set'."""
+    'already_set', 'not_registered'."""
     try:
         _check_pin_shape(pin)
     except ValueError:
@@ -287,7 +287,11 @@ def claim_account(conn: psycopg.Connection, phone: str, pin: str) -> tuple[Optio
         if row is None:
             conn.rollback()
             _burn_time()
-            return None, "bad"
+            # Saying so plainly is the point of this page: a number the owner
+            # has not added yet is the one thing the person registering cannot
+            # work out for themselves. It reveals nothing the outcome does not
+            # already - a registered number visibly proceeds to the PIN step.
+            return None, "not_registered"
         entity_id, name, role, pin_hash, disabled = row
         if disabled:
             conn.rollback()

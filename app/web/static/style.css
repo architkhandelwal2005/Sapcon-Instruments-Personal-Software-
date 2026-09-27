@@ -599,6 +599,40 @@ main.narrow { max-width: 26rem; }
 form.stacked { display: flex; flex-direction: column; gap: 0.9rem; max-width: 22rem; }
 form.stacked label { display: flex; flex-direction: column; gap: 0.3rem; font-weight: 500; }
 form.stacked input { padding: 0.55rem 0.6rem; font-size: 1rem; }
+form.stacked button {
+  margin-top: 0.3rem;
+  font-size: 1rem;
+  padding: 0.6rem 1.4rem;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* The two doors on the sign-in page: one for people who have a PIN, one for
+   people getting theirs. The second is deliberately quieter - almost everyone
+   who reaches this page is signing in, not registering. */
+main.narrow p.or {
+  max-width: 22rem;
+  margin: 1.4rem 0 1rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+a.button.secondary {
+  display: inline-block;
+  padding: 0.55rem 1.2rem;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+a.button.secondary:hover { background: var(--accent); color: white; }
 
 form.inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.8rem; }
 form.inline-form label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.9rem; }

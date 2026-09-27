@@ -71,10 +71,13 @@ def test_a_turned_off_account_cannot_be_claimed():
     assert conn.store["updates"] == []
 
 
-def test_a_number_nobody_registered_is_refused():
+def test_a_number_nobody_registered_is_told_so_and_writes_nothing():
+    """Registration is open to anyone who reaches the page, so this is the
+    common case, not an attack: the office has not added them yet. Saying so is
+    the only thing they cannot work out for themselves."""
     conn = _Conn(None)
     actor, reason = claim_account(conn, "9893351932", "654321")
-    assert actor is None and reason == "bad"
+    assert actor is None and reason == "not_registered"
     assert conn.store["updates"] == []
 
 

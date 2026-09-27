@@ -34,6 +34,8 @@ _MESSAGES = {
     "disabled": "This account has been turned off.",
     "weak_pin": f"Choose a PIN of at least {MIN_PIN_LENGTH} digits.",
     "mismatch": "The two PINs were different. Try again.",
+    "not_registered": "We don't have that number yet. Ask the office to add you, "
+                      "then register here.",
     "already_set": "This number already has a PIN. Sign in with it, or ask for a reset.",
 }
 
