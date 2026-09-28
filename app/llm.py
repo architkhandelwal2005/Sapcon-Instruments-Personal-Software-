@@ -13,7 +13,7 @@ import time
 
 PROVIDER = os.environ.get("EXTRACTION_PROVIDER", "gemini").lower()
 
-_RETRIES = 3  # transient TLS/connection resets to the model API are common here
+_RETRIES = 4  # connection resets and provider capacity spikes are both common here
 
 _ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 _GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
@@ -104,10 +104,36 @@ def _retry_after(exc: Exception) -> float | None:
     return wait if wait <= _RATE_LIMIT_WAIT_CAP else None
 
 
+# Google answers 503 UNAVAILABLE ("this model is currently experiencing high
+# demand") and 500 INTERNAL when its own capacity is short. Both are the API
+# asking to be called again shortly, and neither is a rate limit - so they fell
+# through to `raise` and killed the message on the first attempt. That is how a
+# real voice note was lost: transcription was refused once and never retried.
+# Matched on the exception class and on the text, so it holds for either
+# provider and for a wrapper that loses the class.
+_TRANSIENT_TEXT = re.compile(
+    r"UNAVAILABLE|INTERNAL|overloaded|high demand|try again later|"
+    r"50[0234] (?:Bad Gateway|Internal|Service|Gateway)",
+    re.IGNORECASE,
+)
+
+_TRANSIENT_TYPES = (
+    "ConnectError", "ConnectTimeout", "ReadTimeout", "RemoteProtocolError",
+    "ServerError",                                      # google-genai 5xx
+    "InternalServerError", "APIConnectionError", "APITimeoutError",
+    "OverloadedError",                                  # anthropic
+)
+
+
+def _is_transient(exc: Exception) -> bool:
+    return type(exc).__name__ in _TRANSIENT_TYPES or bool(_TRANSIENT_TEXT.search(str(exc)))
+
+
 def with_retries(call):
-    """Retry transient model-API failures: connection resets, and rate limits
-    short enough to wait out. Shared by every model call - the extraction pass
-    included, since that is the one a lost voice note dies on."""
+    """Retry what the provider itself calls temporary: connection resets,
+    capacity errors (503/500), and rate limits short enough to wait out.
+    Shared by every model call - the extraction and transcription passes
+    included, since those are the ones a lost voice note dies on."""
     last_exc: Exception | None = None
     for attempt in range(_RETRIES):
         try:
@@ -117,12 +143,12 @@ def with_retries(call):
             delay = 1.5 * (attempt + 1)
         except Exception as exc:  # httpx/httpcore connect errors don't subclass the stdlib ones
             asked = _retry_after(exc)
-            if asked is None and type(exc).__name__ not in (
-                "ConnectError", "ConnectTimeout", "ReadTimeout", "RemoteProtocolError"
-            ):
+            if asked is None and not _is_transient(exc):
                 raise
             last_exc = exc
-            delay = asked if asked is not None else 1.5 * (attempt + 1)
+            # A capacity spike needs longer than a dropped connection, and
+            # doubling costs nothing on a call that is going to fail anyway.
+            delay = asked if asked is not None else 2.0 * (2 ** attempt)
         if attempt < _RETRIES - 1:
             time.sleep(delay)
     raise last_exc  # type: ignore[misc]

@@ -28,6 +28,7 @@ from app.llm import transcribe_audio
 from app.phone import DEFAULT_CC, normalize_phone
 from app.query import ask as run_ask
 from app.whatsapp.client import download_media, send_whatsapp, valid_signature
+from app.whatsapp.delivery import record_sent, record_status, statuses
 from app.commands import parse_command
 from app.whatsapp.commands import (
     apply_choice,
@@ -40,7 +41,7 @@ from app.whatsapp.commands import (
     remember,
     undo_command,
 )
-from app.whatsapp.intent import is_question
+from app.whatsapp.intent import classify
 from app.minutes.generate import fetch_meeting_minutes_data
 from app.whatsapp.readback import meeting_readback_reply
 from app.whatsapp.reply import ask_reply, capture_reply, failure_reply, meeting_reply
@@ -79,9 +80,25 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     payload = await request.json()
     for message in _messages(payload):
         background_tasks.add_task(_process_message, message=message)
-    # Always a plain 200: Meta retries anything else, and a delivery-status
-    # callback (no messages at all) is a normal, ignorable payload.
+    if not _messages(payload):
+        background_tasks.add_task(_record_statuses, payload=payload)
+    # Always a plain 200: Meta retries anything else.
     return Response(status_code=200)
+
+
+def _record_statuses(*, payload: dict) -> None:
+    """Delivery outcomes for messages we sent. Meta's answer to a send only
+    says it was accepted; this is where "it actually arrived" comes from, and
+    where a message it silently dropped stops being invisible."""
+    rows = statuses(payload)
+    if not rows:
+        return
+    conn = get_connection()
+    try:
+        for status in rows:
+            record_status(conn, status)
+    finally:
+        release_connection(conn)
 
 
 def _messages(payload: dict) -> list[dict]:
@@ -112,6 +129,14 @@ def _lookup_sender(conn, wa_id: str) -> Optional[str]:
     return str(row[0]) if row else None
 
 
+def _say(conn, to: str, body: str) -> Optional[str]:
+    """Send a reply and remember that we did, so a message Meta later drops is
+    visible instead of silently missing. Returns the outbound message id."""
+    wa_message_id = send_whatsapp(to, body)
+    record_sent(conn, wa_message_id, to)
+    return wa_message_id
+
+
 def _process_message(*, message: dict) -> None:
     from_ = message.get("from", "")
     conn = get_connection()
@@ -125,7 +150,7 @@ def _process_message(*, message: dict) -> None:
             # The note paths persist to ingestion_failures before re-raising and
             # mark the exception as such; a lookup has nothing to keep, and the
             # reply must not claim otherwise.
-            send_whatsapp(from_, failure_reply(exc, saved=getattr(exc, "note_was_saved", False)))
+            _say(conn, from_, failure_reply(exc, saved=getattr(exc, "note_was_saved", False)))
             raise
     finally:
         release_connection(conn)
@@ -138,14 +163,14 @@ def _strip_ask(text: str) -> str:
     return text[len(_ASK_PREFIX):].strip(" :").strip()
 
 
-def _is_lookup(text: str) -> bool:
-    """Whether this message asks for information rather than recording it.
-    "ask ..." still forces a question outright; everything else is classified,
-    and anything not clearly a question is treated as a note to log."""
+def _intent(text: str) -> str:
+    """"note", "question" or "nothing". An explicit "ask ..." still forces a
+    question outright; everything else is classified, and anything not clearly
+    a question or clearly empty is treated as a note to log."""
     body = (text or "").strip()
     if body.lower().startswith(_ASK_PREFIX):
-        return True
-    return is_question(body)
+        return "question"
+    return classify(body)
 
 
 def _reply_to(message: dict) -> Optional[str]:
@@ -167,7 +192,7 @@ def _dispatch(conn, from_, message: dict, logged_by) -> None:
         _handle_photo(conn, from_, image.get("caption"), image.get("id"), logged_by, base)
         return
     if kind != "text":
-        send_whatsapp(from_, "That message type isn't supported yet - send a voice note, a photo, or text.")
+        _say(conn, from_, "That message type isn't supported yet - send a voice note, a photo, or text.")
         return
 
     text = ((message.get("text") or {}).get("body") or "").strip()
@@ -191,7 +216,15 @@ def _route_words(conn, from_, text: str, logged_by, base, *, audio_path, reply_t
         return
     if _handle_command(conn, from_, text, base):
         return
-    if _is_lookup(text):
+
+    intent = _intent(text)
+    if intent == "nothing":
+        # Courtesy, a greeting, a test. Filing it ran the whole pipeline over
+        # one word and left an error row behind. There is nothing to keep and
+        # nothing to answer, so the only right move is to say nothing back -
+        # a reply to "thanks" only invites another "ok".
+        return
+    if intent == "question":
         _handle_ask(conn, from_, _strip_ask(text) if text.lower().startswith(_ASK_PREFIX) else text)
         return
     try:
@@ -212,7 +245,7 @@ def _handle_reply_to_pending(conn, from_, text: str, base, reply_to: Optional[st
 
     if pending["kind"] == "undo" and is_undo(text):
         outcome = undo_command(conn, pending["payload"]["token"])
-        send_whatsapp(from_, command_reply(outcome, base))
+        _say(conn, from_, command_reply(outcome, base))
         return True
 
     if pending["kind"] == "choice":
@@ -241,7 +274,7 @@ def _handle_command(conn, from_, text: str, base) -> bool:
 def _send_command_outcome(conn, from_, outcome, base, *, command=None) -> None:
     """Send the result, and remember what the reply to it would mean - a number
     when choices were offered, "undo" when something changed."""
-    wa_message_id = send_whatsapp(from_, command_reply(outcome, base))
+    wa_message_id = _say(conn, from_, command_reply(outcome, base))
     if not wa_message_id:
         return
     if outcome.status == "ambiguous" and command is not None:
@@ -282,7 +315,7 @@ def _send_readback(conn, from_, result, base) -> None:
         body = meeting_readback_reply(data, result.resolutions, url)
     except Exception:
         body = meeting_reply(result, url)
-    wa_message_id = send_whatsapp(from_, body)
+    wa_message_id = _say(conn, from_, body)
     if wa_message_id:
         _remember_thread(conn, wa_message_id, result.meeting_id, from_)
 
@@ -304,6 +337,11 @@ def _remember_thread(conn, wa_message_id: str, meeting_id: str, from_: str) -> N
 
 
 def _handle_audio(conn, from_, media_id, logged_by, base, *, reply_to: Optional[str]) -> None:
+    """A voice note takes about a minute to come back - download, transcribe,
+    extract, verify, resolve - and on a sleeping free instance rather longer.
+    A minute of silence reads as a dead number, so say we have it first. The
+    same is true of a photo."""
+    _say(conn, from_, "Got your voice note - listening to it now.")
     audio_bytes, mime_type = download_media(media_id)
     suffix = _AUDIO_EXT.get(mime_type, ".ogg")
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -311,23 +349,24 @@ def _handle_audio(conn, from_, media_id, logged_by, base, *, reply_to: Optional[
         audio_path = tmp.name
     transcript = transcribe_audio(audio_bytes, mime_type)
     if not transcript.strip():
-        send_whatsapp(from_, "Got the voice note but couldn't make out any speech - try again?")
+        _say(conn, from_, "Got the voice note but couldn't make out any speech - try again?")
         return
     _route_words(conn, from_, transcript, logged_by, base, audio_path=audio_path, reply_to=reply_to)
 
 
 def _handle_photo(conn, from_, caption, media_id, logged_by, base) -> None:
+    _say(conn, from_, "Got the photo - reading it now.")
     image_bytes, mime_type = download_media(media_id)
     # Caption convention: "diary" anywhere in the caption -> diary page,
     # otherwise card sheet (the more common, ongoing habit).
     capture_type = "diary" if "diary" in (caption or "").lower() else "card"
     result = ingest_capture(conn, image_bytes, mime_type, capture_type, date.today(), logged_by=logged_by)
-    send_whatsapp(from_, capture_reply(result, capture_type, f"{base}/review/capture/{result.capture_event_id}"))
+    _say(conn, from_, capture_reply(result, capture_type, f"{base}/review/capture/{result.capture_event_id}"))
 
 
 def _handle_ask(conn, from_, question) -> None:
     if not question:
-        send_whatsapp(from_, "Ask me something, e.g. \"ask brief me on Priya Nair\".")
+        _say(conn, from_, "Ask me something, e.g. \"ask brief me on Priya Nair\".")
         return
     result = run_ask(conn, question)
-    send_whatsapp(from_, ask_reply(result))
+    _say(conn, from_, ask_reply(result))
