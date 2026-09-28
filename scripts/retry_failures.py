@@ -33,7 +33,7 @@ load_dotenv()
 
 from app.db import get_connection, release_connection
 from app.ingestion.pipeline import ingest_new_meeting
-from app.whatsapp.intent import classify
+from app.agent import plan_message
 
 
 def _waiting(conn, limit: int) -> list[tuple]:
@@ -80,8 +80,8 @@ def main() -> None:
             if not (transcript or "").strip():
                 print(f"  {failure_id}: no transcript to re-run - left for a human")
                 continue
-            intent = classify(transcript)
-            if intent != "note":
+            intent = plan_message(transcript, "").action
+            if intent != "log":
                 with conn.cursor() as cur:
                     cur.execute(
                         "update ingestion_failures set resolved = true, "

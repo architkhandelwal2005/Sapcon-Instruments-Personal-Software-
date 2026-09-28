@@ -1,7 +1,13 @@
-"""The WhatsApp intake webhook (Meta Cloud API): a voice note or typed note
-becomes a new meeting (the same pipeline /meetings/new already calls); a photo
-becomes a card/diary capture; a message starting with "ask" is a lookup, not
-something to log.
+"""The WhatsApp intake webhook (Meta Cloud API).
+
+Everything that arrives as words - typed, or spoken and transcribed - goes to
+the planner, which reads the conversation so far and says what the message
+wants: record it, answer it, change something, undo, or just talk. There are no
+keywords to remember. This replaced a ladder of prefix and regex checks that
+could recognise three instructions and turned everything else, including
+"hello", into a meeting.
+
+A photo is still a card/diary capture, decided by its caption.
 
 Security: every POST must carry a valid X-Hub-Signature-256 over the exact raw
 body (the only thing standing between the public internet and writing rows into
@@ -29,7 +35,7 @@ from app.phone import DEFAULT_CC, normalize_phone
 from app.query import ask as run_ask
 from app.whatsapp.client import download_media, send_whatsapp, valid_signature
 from app.whatsapp.delivery import record_sent, record_status, statuses
-from app.commands import parse_command
+from app.commands import ParsedCommand
 from app.whatsapp.commands import (
     apply_choice,
     apply_command,
@@ -41,7 +47,7 @@ from app.whatsapp.commands import (
     remember,
     undo_command,
 )
-from app.whatsapp.intent import classify
+from app.agent import Plan, plan_message, recent, remember_turn, render
 from app.minutes.generate import fetch_meeting_minutes_data
 from app.whatsapp.readback import meeting_readback_reply
 from app.whatsapp.reply import ask_reply, capture_reply, failure_reply, meeting_reply
@@ -134,6 +140,7 @@ def _say(conn, to: str, body: str) -> Optional[str]:
     visible instead of silently missing. Returns the outbound message id."""
     wa_message_id = send_whatsapp(to, body)
     record_sent(conn, wa_message_id, to)
+    remember_turn(conn, to, "us", body)
     return wa_message_id
 
 
@@ -154,23 +161,6 @@ def _process_message(*, message: dict) -> None:
             raise
     finally:
         release_connection(conn)
-
-
-_ASK_PREFIX = "ask"
-
-
-def _strip_ask(text: str) -> str:
-    return text[len(_ASK_PREFIX):].strip(" :").strip()
-
-
-def _intent(text: str) -> str:
-    """"note", "question" or "nothing". An explicit "ask ..." still forces a
-    question outright; everything else is classified, and anything not clearly
-    a question or clearly empty is treated as a note to log."""
-    body = (text or "").strip()
-    if body.lower().startswith(_ASK_PREFIX):
-        return "question"
-    return classify(body)
 
 
 def _reply_to(message: dict) -> Optional[str]:
@@ -202,37 +192,101 @@ def _dispatch(conn, from_, message: dict, logged_by) -> None:
 
 
 def _route_words(conn, from_, text: str, logged_by, base, *, audio_path, reply_to: Optional[str]) -> None:
-    """One route for anything that arrives as words, typed or spoken - a voice
-    note is no less likely to be a question than a typed line.
+    """One route for anything that arrives as words, typed or spoken.
 
-    A reply to a readback we sent skips the question check entirely: replying to
-    that message is unambiguous intent, and a correction misread as a question
-    would be lost. It also saves a model call."""
+    Two things are decided before the model is asked anything, because in both
+    cases the reply he is answering already says what he means, and a model
+    that disagreed would lose the message: a reply to a readback is a
+    correction to that meeting, and a reply to a question we asked is the
+    answer to it. Everything else goes to the planner, which reads the
+    conversation so far rather than this message alone."""
+    remember_turn(conn, from_, "them", text)
+
     meeting_id = _correction_target(conn, reply_to)
     if meeting_id is not None:
         _apply_correction(conn, from_, text, meeting_id, logged_by, base, audio_path=audio_path)
         return
     if _handle_reply_to_pending(conn, from_, text, base, reply_to):
         return
-    if _handle_command(conn, from_, text, base):
+
+    plan = plan_message(text, render(recent(conn, from_)))
+    _carry_out(conn, from_, plan, text, logged_by, base, audio_path=audio_path)
+
+
+def _carry_out(conn, from_, plan: Plan, text: str, logged_by, base, *, audio_path) -> None:
+    """Do what the plan says. The model chose the intent and the words; which
+    row those words mean is still decided in SQL, so an instruction that
+    matches two tasks changes neither."""
+    if plan.action == "chat":
+        # Nothing to record and nothing to look up. A greeting used to run the
+        # whole pipeline over one word and leave an error row behind.
+        if plan.reply:
+            _say(conn, from_, plan.reply)
         return
 
-    intent = _intent(text)
-    if intent == "nothing":
-        # Courtesy, a greeting, a test. Filing it ran the whole pipeline over
-        # one word and left an error row behind. There is nothing to keep and
-        # nothing to answer, so the only right move is to say nothing back -
-        # a reply to "thanks" only invites another "ok".
+    if plan.action == "ask":
+        _handle_ask(conn, from_, plan.question or text)
         return
-    if intent == "question":
-        _handle_ask(conn, from_, _strip_ask(text) if text.lower().startswith(_ASK_PREFIX) else text)
+
+    if plan.action == "undo":
+        _handle_undo(conn, from_, base)
         return
+
+    if plan.action in ("assign_task", "complete_task", "drop_lead"):
+        command = ParsedCommand(action=plan.action, target=plan.target,
+                                person=plan.person or None)
+        outcome = apply_command(conn, command)
+        if outcome.status == "not_found":
+            # He may be recording something new rather than pointing at a row
+            # that exists. Filing it keeps the note; guessing a row would not.
+            _log_note(conn, from_, text, logged_by, base, audio_path=audio_path)
+            return
+        _send_command_outcome(conn, from_, outcome, base, command=command)
+        return
+
+    _log_note(conn, from_, text, logged_by, base, audio_path=audio_path)
+
+
+def _log_note(conn, from_, text, logged_by, base, *, audio_path) -> None:
     try:
         result = ingest_new_meeting(conn, text, date.today(), audio_path=audio_path, logged_by=logged_by)
     except Exception as exc:
         exc.note_was_saved = True  # ingest_new_meeting recorded it for a retry
         raise
     _send_readback(conn, from_, result, base)
+
+
+UNDO_WINDOW_HOURS = 12
+
+
+def _handle_undo(conn, from_, base) -> None:
+    """"undo" said on its own, rather than as a reply to the change itself.
+
+    Only a recent change, and only once. An undo means "that thing you just
+    did"; reaching back further would let the word, typed out of context,
+    silently reverse something nobody was thinking about. Undoing an older
+    change is a job for the website, where you can see what you are changing
+    before you change it."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "select wa_message_id, payload from whatsapp_pending "
+            "where sender_phone = %s and kind = 'undo' and used_at is null "
+            "  and created_at > now() - make_interval(hours => %s) "
+            "order by created_at desc limit 1",
+            (from_, UNDO_WINDOW_HOURS),
+        )
+        row = cur.fetchone()
+    conn.rollback()
+    if row is None:
+        _say(conn, from_, "Nothing recent of mine to undo. If you need an older change "
+                          f"reversed, it is on {base}/tasks.")
+        return
+    outcome = undo_command(conn, row[1]["token"])
+    with conn.cursor() as cur:
+        cur.execute("update whatsapp_pending set used_at = now() where wa_message_id = %s",
+                    (row[0],))
+    conn.commit()
+    _say(conn, from_, command_reply(outcome, base))
 
 
 def _handle_reply_to_pending(conn, from_, text: str, base, reply_to: Optional[str]) -> bool:
@@ -245,6 +299,12 @@ def _handle_reply_to_pending(conn, from_, text: str, base, reply_to: Optional[st
 
     if pending["kind"] == "undo" and is_undo(text):
         outcome = undo_command(conn, pending["payload"]["token"])
+        with conn.cursor() as cur:
+            # Spent, so replying "undo" to the same message twice cannot put a
+            # row back to a state it has since been moved on from.
+            cur.execute("update whatsapp_pending set used_at = now() where wa_message_id = %s",
+                        (reply_to,))
+        conn.commit()
         _say(conn, from_, command_reply(outcome, base))
         return True
 
@@ -257,18 +317,6 @@ def _handle_reply_to_pending(conn, from_, text: str, base, reply_to: Optional[st
         _send_command_outcome(conn, from_, outcome, base)
         return True
     return False
-
-
-def _handle_command(conn, from_, text: str, base) -> bool:
-    """An instruction to change something that already exists. Returns whether
-    the message was one - anything else falls through to being logged or
-    answered, so a note is never swallowed by a failed command."""
-    command = parse_command(text)
-    if command is None:
-        return False
-    outcome = apply_command(conn, command)
-    _send_command_outcome(conn, from_, outcome, base, command=command)
-    return True
 
 
 def _send_command_outcome(conn, from_, outcome, base, *, command=None) -> None:
