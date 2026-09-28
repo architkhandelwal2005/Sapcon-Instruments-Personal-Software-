@@ -92,8 +92,17 @@ def main() -> None:
                 print(f"  {failure_id}: {intent}, not a note - closed without filing")
                 continue
             try:
-                result = ingest_new_meeting(conn, transcript, meeting_date)
+                result = ingest_new_meeting(conn, transcript, meeting_date, record_failures=False)
             except Exception as exc:
+                # The row stays unresolved and keeps its place in the queue.
+                # Filing a second copy is how draining the queue used to make
+                # it longer.
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "update ingestion_failures set error_message = %s where id = %s",
+                        (f"{type(exc).__name__}: {exc}"[:2000], failure_id),
+                    )
+                conn.commit()
                 print(f"  {failure_id}: failed again - {type(exc).__name__}: {str(exc)[:90]}")
                 continue
             with conn.cursor() as cur:

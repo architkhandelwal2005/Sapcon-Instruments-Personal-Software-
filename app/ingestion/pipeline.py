@@ -159,10 +159,16 @@ def ingest_new_meeting(
     audio_path: Optional[str] = None,
     on_resolved: OnResolved = None,
     logged_by: Optional[str] = None,
+    record_failures: bool = True,
 ) -> IngestResult:
     """logged_by: entity id of whoever recorded this interaction (the uncle, office
     boy, or a marketing employee) - null when the concept doesn't apply (e.g. CLI
-    testing). Lets a lead's activity history be filtered to one employee's calls."""
+    testing). Lets a lead's activity history be filtered to one employee's calls.
+
+    record_failures: False when the caller is itself retrying something already
+    in the failure queue. Otherwise a retry that fails again files a second copy
+    of the same note, and the queue grows every time somebody tries to drain
+    it."""
     try:
         result = extract(transcript, employee_roster(conn))
         resolved = _resolve_entities(conn, result.entities, transcript, on_resolved)
@@ -190,7 +196,8 @@ def ingest_new_meeting(
         )
     except Exception as exc:
         conn.rollback()
-        record_failure(conn, meeting_date, audio_path, transcript, exc)
+        if record_failures:
+            record_failure(conn, meeting_date, audio_path, transcript, exc)
         raise
 
 
