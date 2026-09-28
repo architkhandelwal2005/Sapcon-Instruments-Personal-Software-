@@ -42,39 +42,67 @@ _ACTIONS = {"log", "ask", "assign_task", "complete_task", "drop_lead", "undo", "
 # greeting is not a thing people send.
 MAX_CHAT_CHARS = 200
 
-# The everyday courtesies, settled before the model is asked. Most replies to a
-# readback are one of these, and against a free tier capped at 500 calls a day
-# that is the difference between paying for politeness and not. It also means a
-# greeting still costs nothing on the day the model is refusing calls.
-_ACK_WORDS = {
+# Two kinds of pleasantry, and they want opposite treatment. Both are settled
+# before the model is asked - against a free tier capped at 500 calls a day that
+# is the difference between paying for politeness and not, and it means a
+# greeting still works on a day the provider is refusing calls.
+
+# Closers. These end an exchange, and answering one only invites another "ok".
+_CLOSING_WORDS = {
     "thanks", "thank", "thankyou", "ty", "thx", "tx",
-    "ok", "okay", "okey", "k", "kk", "fine", "good", "great", "nice", "perfect",
+    "ok", "okay", "okey", "k", "kk", "fine", "great", "nice", "perfect",
     "got", "it", "sure", "right", "correct", "yes", "yeah", "yep", "yup", "no",
     "noted", "understood", "received", "cool", "super", "excellent", "welcome",
-    "u", "you", "so", "much", "very", "well", "all", "clear",
-    "hi", "hello", "hey", "namaste", "morning", "afternoon", "evening", "bye",
+    "u", "you", "so", "much", "very", "well", "all", "clear", "bye",
     "haan", "han", "theek", "thik", "hai", "achha", "acha", "accha",
     "shukriya", "dhanyavad", "bilkul", "sahi", "hmm", "hm", "hmmm", "ji",
 }
+
+# Openers. These start one, and silence in answer to a greeting reads as a dead
+# number - which is exactly how it read to the first person who tried it.
+_GREETING_WORDS = {
+    "hi", "hii", "hiii", "hello", "helo", "hey", "yo",
+    "namaste", "namaskar", "salaam", "morning", "afternoon", "evening",
+    "good", "there",
+}
+
+GREETING_REPLY = (
+    "Yes, I'm here.\n\n"
+    "Send me a voice note after any visit and I'll record it - people, "
+    "companies, tasks and dates - and read back what I understood.\n\n"
+    "You can also ask me things (\"what's pending with Vishal\", "
+    "\"give me Rajesh's number\", \"what happened at Parag Foods\") "
+    "or tell me to change something (\"assign the Rakesh follow-up to Vishal\", "
+    "\"the Parag quotation is done\")."
+)
 
 _WORD = re.compile(r"[a-z]+")
 _NO_LETTERS = re.compile(r"^[\W\d_]+$", re.UNICODE)   # an emoji or a tick alone
 
 
-def is_courtesy(text: str) -> bool:
-    """A short pleasantry with nothing in it to keep or look up.
+def _all_known(text: str, vocabulary: set[str]) -> bool:
+    """Every word is one of these, and there are not many of them.
 
-    Deliberately narrow: every word must be a known one, so "thanks, also met
-    Rajesh today" is not a courtesy and goes to the model like anything else.
-    Being wrong here means dropping a message, so it only fires on ones made
-    entirely of these words."""
+    Deliberately narrow: "thanks, also met Rajesh today" is not a courtesy and
+    goes to the model like anything else. Being wrong here means dropping a
+    message, so it only fires on ones made entirely of known words."""
+    words = _WORD.findall(text.lower())
+    return bool(words) and len(words) <= 5 and all(w in vocabulary for w in words)
+
+
+def courtesy_reply(text: str) -> str | None:
+    """What to say to a pleasantry, decided without a model. None means this is
+    not one. An empty string means it is, and the right answer is silence."""
     body = (text or "").strip()
     if not body or len(body) > 40:
-        return False
-    if _NO_LETTERS.match(body):
-        return True
-    words = _WORD.findall(body.lower())
-    return bool(words) and len(words) <= 5 and all(w in _ACK_WORDS for w in words)
+        return None
+    if _NO_LETTERS.match(body):          # a thumbs-up or a tick: acknowledged
+        return ""
+    if _all_known(body, _GREETING_WORDS):
+        return GREETING_REPLY
+    if _all_known(body, _CLOSING_WORDS):
+        return ""
+    return None
 
 
 @dataclass
@@ -140,10 +168,12 @@ def plan_message(text: str, conversation: str) -> Plan:
     body = (text or "").strip()
     if not body:
         return Plan(action="chat", reply="")
-    if is_courtesy(body):
-        # Nothing to record, nothing to look up, and nothing worth saying back:
-        # a reply to "thanks" only invites another "ok".
-        return Plan(action="chat", reply="")
+    courtesy = courtesy_reply(body)
+    if courtesy is not None:
+        # Nothing to record and nothing to look up. A greeting still gets an
+        # answer - silence in reply to "hi" reads as a dead number - while
+        # "thanks" gets none, because answering it invites another "ok".
+        return Plan(action="chat", reply=courtesy)
 
     user = f"Conversation so far:\n{conversation}\n\nHis latest message:\n{body}"
     try:
