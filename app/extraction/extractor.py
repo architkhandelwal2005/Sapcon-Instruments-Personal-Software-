@@ -2,7 +2,7 @@ import os
 
 from app.extraction.schema import ExtractionResult
 from app.extraction.verify import verify
-from app.llm import with_retries
+from app.llm import try_models, with_retries
 
 PROVIDER = os.environ.get("EXTRACTION_PROVIDER", "gemini").lower()
 
@@ -10,13 +10,16 @@ PROVIDER = os.environ.get("EXTRACTION_PROVIDER", "gemini").lower()
 def _raw_extract(transcript: str, roster: list[str]) -> ExtractionResult:
     if PROVIDER == "anthropic":
         from app.extraction.providers.anthropic_provider import extract as fn
-    elif PROVIDER == "gemini":
+
+        # One model, so retries are all there is to fall back on.
+        return with_retries(lambda: fn(transcript, roster))
+    if PROVIDER == "gemini":
         from app.extraction.providers.gemini_provider import extract as fn
-    else:
-        raise ValueError(f"Unknown EXTRACTION_PROVIDER: {PROVIDER!r}")
-    # Same retry seam as every other model call - a connection reset or a
-    # short rate-limit wait on this pass used to lose the whole voice note.
-    return with_retries(lambda: fn(transcript, roster))
+
+        # Retries, then a bigger model when the small one is out of free
+        # capacity. This pass refusing used to lose the whole voice note.
+        return try_models(lambda model: fn(transcript, roster, model=model))
+    raise ValueError(f"Unknown EXTRACTION_PROVIDER: {PROVIDER!r}")
 
 
 def extract(transcript: str, roster: list[str]) -> ExtractionResult:

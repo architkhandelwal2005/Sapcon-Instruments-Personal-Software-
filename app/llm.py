@@ -18,6 +18,41 @@ _RETRIES = 4  # connection resets and provider capacity spikes are both common h
 _ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 _GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
+# The free tier is served from spare capacity, and the small models run out of
+# it first: on the evening this was written every -lite model answered 503 while
+# gemini-3.5-flash answered normally. Retrying the same overloaded model harder
+# does not help, so after the retries are spent the call is made once more
+# against a bigger model. Slower and dearer per call, and better than losing a
+# voice note. Set GEMINI_FALLBACK_MODEL to "" to turn it off.
+_GEMINI_FALLBACK = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash")
+
+
+def gemini_models() -> list[str]:
+    """The model to call, then what to fall back to when it is refusing."""
+    if _GEMINI_FALLBACK and _GEMINI_FALLBACK != _GEMINI_MODEL:
+        return [_GEMINI_MODEL, _GEMINI_FALLBACK]
+    return [_GEMINI_MODEL]
+
+
+def try_models(call):
+    """call(model) -> result. Each model gets the full retry treatment before
+    the next is tried, so a brief spike is ridden out on the model we wanted
+    rather than escalating at the first refusal.
+
+    A permanent error (a bad request, a bad key) is raised from the first model
+    without trying the second - the second would fail the same way, and doubling
+    a failure wastes a call from a daily allowance."""
+    models = gemini_models()
+    last_exc: Exception | None = None
+    for model in models:
+        try:
+            return with_retries(lambda: call(model))
+        except Exception as exc:
+            if not _is_transient(exc):
+                raise
+            last_exc = exc
+    raise last_exc  # type: ignore[misc]
+
 
 def normalize_ws(s: str) -> str:
     """Collapse every run of whitespace to a single space. Transcripts wrap
@@ -40,7 +75,7 @@ def complete_json(system: str, user: str, *, max_tokens: int = 1024):
     """Call the configured model at temperature 0 and return the first JSON
     value ([...] or {...}) parsed out of its response. Retries a few times on
     transient connection errors before giving up."""
-    return _with_retries(lambda: _first_json(_raw_completion(system, user, max_tokens)))
+    return try_models(lambda model: _first_json(_raw_completion(system, user, max_tokens, model=model)))
 
 
 def complete_json_with_image(system: str, user: str, image_bytes: bytes, mime_type: str, *, max_tokens: int = 2048):
@@ -48,8 +83,11 @@ def complete_json_with_image(system: str, user: str, image_bytes: bytes, mime_ty
     and diary pages. Same provider gate: real photographed customer data is exactly
     as sensitive as a real transcript and must not touch the free Gemini tier
     either."""
-    return _with_retries(
-        lambda: _first_json(_raw_completion(system, user, max_tokens, image_bytes=image_bytes, mime_type=mime_type))
+    return try_models(
+        lambda model: _first_json(
+            _raw_completion(system, user, max_tokens, image_bytes=image_bytes,
+                            mime_type=mime_type, model=model)
+        )
     )
 
 
@@ -63,16 +101,16 @@ def transcribe_audio(audio_bytes: bytes, mime_type: str) -> str:
     'anthropic' for that reason, transcription itself still touches Gemini
     until this function is pointed at a paid Gemini key or another audio-
     capable provider."""
-    return _with_retries(lambda: _raw_transcribe(audio_bytes, mime_type))
+    return try_models(lambda model: _raw_transcribe(audio_bytes, mime_type, model=model))
 
 
-def _raw_transcribe(audio_bytes: bytes, mime_type: str) -> str:
+def _raw_transcribe(audio_bytes: bytes, mime_type: str, *, model: str = "") -> str:
     from google import genai
     from google.genai import types
 
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     resp = client.models.generate_content(
-        model=_GEMINI_MODEL,
+        model=model or _GEMINI_MODEL,
         contents=[
             types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
             "Transcribe this audio verbatim, in whatever language(s) are spoken. "
@@ -157,7 +195,7 @@ def with_retries(call):
 _with_retries = with_retries  # the name the calls in this module already use
 
 
-def _raw_completion(system: str, user: str, max_tokens: int, *, image_bytes: bytes | None = None, mime_type: str | None = None) -> str:
+def _raw_completion(system: str, user: str, max_tokens: int, *, image_bytes: bytes | None = None, mime_type: str | None = None, model: str = "") -> str:
     if PROVIDER == "anthropic":
         import base64
 
@@ -187,7 +225,7 @@ def _raw_completion(system: str, user: str, max_tokens: int, *, image_bytes: byt
         client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
         contents = [types.Part.from_bytes(data=image_bytes, mime_type=mime_type), user] if image_bytes is not None else user
         resp = client.models.generate_content(
-            model=_GEMINI_MODEL,
+            model=model or _GEMINI_MODEL,
             contents=contents,
             config={
                 "system_instruction": system,
