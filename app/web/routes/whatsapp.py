@@ -21,14 +21,17 @@ response is sent.
 
 import os
 import re
-import tempfile
+import sys
 from datetime import date
 from typing import Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 
 from app.capture.pipeline import ingest_capture
+from app.capture.storage import upload_audio
 from app.db import get_connection, release_connection
+from app.ingestion.failures import record_failure
 from app.ingestion.pipeline import append_correction, ingest_new_meeting
 from app.llm import transcribe_audio
 from app.phone import DEFAULT_CC, normalize_phone
@@ -387,19 +390,41 @@ def _remember_thread(conn, wa_message_id: str, meeting_id: str, from_: str) -> N
 def _handle_audio(conn, from_, media_id, logged_by, base, *, reply_to: Optional[str]) -> None:
     """A voice note takes about a minute to come back - download, transcribe,
     extract, verify, resolve - and on a sleeping free instance rather longer.
-    A minute of silence reads as a dead number, so say we have it first. The
-    same is true of a photo."""
+    A minute of silence reads as a dead number, so say we have it first.
+
+    The recording is kept before a word of it is read. It used to go to a temp
+    file on a host whose disk is wiped on every restart, and transcription ran
+    before anything at all was recorded - so when the model refused, and it did
+    refuse a real 1:23 note, there was no row, no retry and no trace that the
+    note had ever existed. Now the refusal costs a wait instead of the note."""
     _say(conn, from_, "Got your voice note - listening to it now.")
     audio_bytes, mime_type = download_media(media_id)
-    suffix = _AUDIO_EXT.get(mime_type, ".ogg")
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(audio_bytes)
-        audio_path = tmp.name
-    transcript = transcribe_audio(audio_bytes, mime_type)
+    audio_url = _keep_audio(audio_bytes, mime_type)
+
+    try:
+        transcript = transcribe_audio(audio_bytes, mime_type)
+    except Exception as exc:
+        record_failure(conn, date.today(), audio_url, None, exc)
+        exc.note_was_saved = bool(audio_url)
+        raise
     if not transcript.strip():
         _say(conn, from_, "Got the voice note but couldn't make out any speech - try again?")
         return
-    _route_words(conn, from_, transcript, logged_by, base, audio_path=audio_path, reply_to=reply_to)
+    _route_words(conn, from_, transcript, logged_by, base, audio_path=audio_url, reply_to=reply_to)
+
+
+def _keep_audio(audio_bytes: bytes, mime_type: str) -> Optional[str]:
+    """Put the recording somewhere that outlives this container, and say where.
+
+    Returns None if storage itself is unreachable - the note then goes on to
+    transcription anyway, because a storage outage is no reason to refuse a
+    voice note that might transcribe perfectly well."""
+    try:
+        name = f"{uuid4()}{_AUDIO_EXT.get(mime_type, '.ogg')}"
+        return upload_audio(audio_bytes, mime_type, name)
+    except Exception as exc:
+        print(f"could not store the voice note: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return None
 
 
 def _handle_photo(conn, from_, caption, media_id, logged_by, base) -> None:

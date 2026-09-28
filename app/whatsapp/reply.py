@@ -61,11 +61,31 @@ def failure_reply(exc: Exception, *, saved: bool) -> str:
     nothing to save, so it must not claim otherwise."""
     from app.ingestion.failures import classify_error
 
-    if classify_error(exc) == "rate_limit":
+    kind = classify_error(exc)
+    busy = kind == "api_error" and _looks_busy(exc)
+
+    if kind == "rate_limit":
         if saved:
             return ("Got it, but today's AI limit is used up - your note is saved "
                     "and will be processed once the limit resets.")
         return "Today's AI limit is used up - ask me again once it resets."
+    if busy:
+        # Not his fault and not ours: the model provider is refusing calls.
+        # Saying "try again in a moment" invited exactly that, and the next
+        # attempt failed the same way.
+        if saved:
+            return ("Got your note and kept it. The AI service is overloaded right now, "
+                    "so I could not read it yet - it will be processed automatically "
+                    "once the service is back. Nothing is lost.")
+        return ("The AI service is overloaded right now, so I cannot answer that yet. "
+                "Try again in a few minutes - anything you send me to record is still "
+                "kept safely in the meantime.")
     if saved:
         return "Got your message but couldn't process it - it's saved, we'll follow up."
     return "Couldn't answer that just now - try again in a moment."
+
+
+def _looks_busy(exc: Exception) -> bool:
+    """A provider capacity error (503/500) rather than a fault in the message."""
+    text = str(exc)
+    return "503" in text or "UNAVAILABLE" in text or "overloaded" in text.lower()

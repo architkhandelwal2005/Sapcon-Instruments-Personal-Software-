@@ -31,16 +31,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from app.agent import plan_message
+from app.capture.storage import download
 from app.db import get_connection, release_connection
 from app.ingestion.pipeline import ingest_new_meeting
-from app.agent import plan_message
+from app.llm import transcribe_audio
 
 
 def _waiting(conn, limit: int) -> list[tuple]:
     with conn.cursor() as cur:
         cur.execute(
             """
-            select id, meeting_date, raw_transcript, error_type, occurred_at
+            select id, meeting_date, raw_transcript, error_type, occurred_at, audio_path
             from ingestion_failures
             where not resolved
             order by occurred_at
@@ -67,19 +69,38 @@ def main() -> None:
             return
 
         print(f"{len(rows)} note(s) waiting:\n")
-        for failure_id, meeting_date, transcript, error_type, occurred_at in rows:
+        for _id, _date, transcript, error_type, occurred_at, audio in rows:
             head = (transcript or "").strip().replace("\n", " ")[:70]
-            print(f"  {occurred_at:%d %b %H:%M}  {error_type:<16} {head or '(no transcript)'}")
+            if not head:
+                head = "(a voice note, kept)" if audio else "(nothing kept)"
+            print(f"  {occurred_at:%d %b %H:%M}  {error_type:<16} {head}")
 
         if not args.commit:
             print("\nRe-run with --commit to reprocess them.")
             return
 
         print()
-        for failure_id, meeting_date, transcript, _error_type, _occurred_at in rows:
+        for failure_id, meeting_date, transcript, _error_type, _occurred_at, audio in rows:
             if not (transcript or "").strip():
-                print(f"  {failure_id}: no transcript to re-run - left for a human")
-                continue
+                # A voice note that was kept but never transcribed - the model
+                # was refusing calls when it arrived. This is the whole reason
+                # the recording is stored rather than held in memory.
+                if not audio or not audio.startswith("http"):
+                    print(f"  {failure_id}: nothing kept to re-run - left for a human")
+                    continue
+                try:
+                    transcript = transcribe_audio(download(audio), "audio/ogg")
+                except Exception as exc:
+                    print(f"  {failure_id}: still cannot transcribe - {type(exc).__name__}: {str(exc)[:70]}")
+                    continue
+                if not transcript.strip():
+                    print(f"  {failure_id}: transcribed to nothing - left for a human")
+                    continue
+                with conn.cursor() as cur:
+                    cur.execute("update ingestion_failures set raw_transcript = %s where id = %s",
+                                (transcript, failure_id))
+                conn.commit()
+                print(f"  {failure_id}: transcribed - {transcript.strip()[:60]}")
             intent = plan_message(transcript, "").action
             if intent != "log":
                 with conn.cursor() as cur:
