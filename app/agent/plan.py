@@ -66,6 +66,17 @@ _GREETING_WORDS = {
     "good", "there",
 }
 
+# Said when the model picks "chat" but supplies no words. Silence is right for
+# a courtesy and wrong for everything else: "Whats left" got no reply at all,
+# which is indistinguishable from the number being dead. If we do not
+# understand, say so and give him something to aim at.
+UNSURE_REPLY = (
+    "Sorry, I did not follow that. Could you say a bit more?\n\n"
+    "For example: \"what is pending with Vishal\", \"what happened at Parag Foods\", "
+    "\"give me Rajesh's number\" - or just send a voice note about a visit and "
+    "I will record it."
+)
+
 GREETING_REPLY = (
     "Yes, I'm here.\n\n"
     "Send me a voice note after any visit and I'll record it - people, "
@@ -129,7 +140,9 @@ Actions:
   contact, an instruction for his team to do something new. Anything with facts worth
   keeping. This is the default for anything substantial.
 - "ask": he wants information back out of the CRM - about a person, a company, pending
-  work, what happened somewhere, someone's number, a summary.
+  work, what happened somewhere, someone's number, a summary. Anything about the state
+  of the work is "ask", however briefly he puts it: "what's left", "what's pending",
+  "anything from Vishal", "status?", "where are we with Thermo". Short is not vague.
 - "assign_task": give an EXISTING task an owner. Needs "person".
 - "complete_task": mark an EXISTING task finished.
 - "drop_lead": stop pursuing a lead.
@@ -150,7 +163,8 @@ Rules that matter:
 - Small talk wrapped around real content is "log": "thanks, also met Rajesh today" is a
   log, not chat.
 - When you genuinely cannot tell what he wants, use "chat" and ask him a short question
-  back. Never guess between changing two different things.
+  back - always with words in "reply", never an empty one. Never guess between changing
+  two different things.
 - If in doubt between "log" and anything else, choose "log". A note filed wrongly is a
   row someone deletes; a note treated as a question is a visit lost.
 
@@ -206,4 +220,9 @@ def plan_message(text: str, conversation: str) -> Plan:
     # Chat is the only action that discards the message, so it is bounded.
     if plan.action == "chat" and len(body) > MAX_CHAT_CHARS:
         return Plan(action="log")
+    if plan.action == "chat" and not plan.reply:
+        # Silence is a deliberate answer to a courtesy, settled above without
+        # ever reaching here. Anywhere else it is just no answer, which reads
+        # as a dead number.
+        plan.reply = UNSURE_REPLY
     return plan

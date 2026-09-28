@@ -84,3 +84,20 @@ def test_a_question_defaults_to_the_message_when_the_model_omits_it(monkeypatch)
     _patch(monkeypatch, {"action": "ask"})
     plan = plan_message("who is Priya Nair", "")
     assert plan.question == "who is Priya Nair"
+
+
+def test_chat_with_nothing_to_say_still_says_something(monkeypatch):
+    """Silence is a deliberate answer to "thanks" and never to anything else.
+    "Whats left" got no reply at all, which reads exactly like a dead number."""
+    from app.agent.plan import UNSURE_REPLY
+
+    _patch(monkeypatch, {"action": "chat", "reply": ""})
+    plan = plan_message("whats left", "")
+    assert plan.action == "chat"
+    assert plan.reply == UNSURE_REPLY
+
+
+def test_the_unsure_reply_offers_something_to_try():
+    from app.agent.plan import UNSURE_REPLY
+
+    assert "pending" in UNSURE_REPLY and "voice note" in UNSURE_REPLY
