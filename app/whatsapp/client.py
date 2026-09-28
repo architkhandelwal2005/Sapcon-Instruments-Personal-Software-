@@ -64,6 +64,37 @@ def send_whatsapp(to: str, body: str) -> str | None:
         return None
 
 
+def send_template(to: str, template: str, language: str = "en_US") -> str | None:
+    """Open a conversation, rather than reply inside one.
+
+    WhatsApp only allows free-form text within 24 hours of the person's last
+    message. Outside that window Meta accepts the send, hands back a real
+    message id, and drops the message - which is how two messages were reported
+    as sent and never reached a phone. A pre-approved template is the only thing
+    that gets through, and sending one re-opens the window for 24 hours, so a
+    real message can follow it.
+
+    The template must already be approved in the WhatsApp Manager; an unknown
+    name is refused by Meta rather than delivered as its own text."""
+    url = f"{_GRAPH}/{GRAPH_VERSION}/{os.environ['WHATSAPP_PHONE_NUMBER_ID']}/messages"
+    payload = json.dumps({
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "template",
+        "template": {"name": template, "language": {"code": language}},
+    }).encode()
+    req = urllib.request.Request(
+        url, data=payload, method="POST",
+        headers={"Authorization": f"Bearer {_token()}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        raw = resp.read()
+    try:
+        return json.loads(raw)["messages"][0]["id"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
+
+
 def download_media(media_id: str) -> tuple[bytes, str]:
     """Returns (bytes, mime_type). The mime type comes from Meta's metadata
     rather than the filename - voice notes arrive as audio/ogg; codecs=opus,
