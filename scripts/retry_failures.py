@@ -36,6 +36,7 @@ from app.capture.storage import download
 from app.db import get_connection, release_connection
 from app.ingestion.pipeline import ingest_new_meeting
 from app.llm import transcribe_audio
+from app.transcription.vocabulary import known_names
 
 
 def _waiting(conn, limit: int) -> list[tuple]:
@@ -89,7 +90,7 @@ def main() -> None:
                     print(f"  {failure_id}: nothing kept to re-run - left for a human")
                     continue
                 try:
-                    transcript = transcribe_audio(download(audio), "audio/ogg")
+                    transcript = transcribe_audio(download(audio), "audio/ogg", known_names(conn))
                 except Exception as exc:
                     print(f"  {failure_id}: still cannot transcribe - {type(exc).__name__}: {str(exc)[:70]}")
                     continue

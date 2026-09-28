@@ -11,6 +11,8 @@ import os
 import re
 import time
 
+from app.transcription.vocabulary import vocabulary_hint
+
 PROVIDER = os.environ.get("EXTRACTION_PROVIDER", "gemini").lower()
 
 _RETRIES = 4  # connection resets and provider capacity spikes are both common here
@@ -91,7 +93,8 @@ def complete_json_with_image(system: str, user: str, image_bytes: bytes, mime_ty
     )
 
 
-def transcribe_audio(audio_bytes: bytes, mime_type: str) -> str:
+def transcribe_audio(audio_bytes: bytes, mime_type: str,
+                     names: "list[str] | None" = None) -> str:
     """Transcribe a voice note to text via Gemini's native audio understanding.
 
     Always Gemini, regardless of EXTRACTION_PROVIDER - Anthropic's API has no
@@ -101,10 +104,11 @@ def transcribe_audio(audio_bytes: bytes, mime_type: str) -> str:
     'anthropic' for that reason, transcription itself still touches Gemini
     until this function is pointed at a paid Gemini key or another audio-
     capable provider."""
-    return try_models(lambda model: _raw_transcribe(audio_bytes, mime_type, model=model))
+    return try_models(lambda model: _raw_transcribe(audio_bytes, mime_type, model=model, names=names))
 
 
-def _raw_transcribe(audio_bytes: bytes, mime_type: str, *, model: str = "") -> str:
+def _raw_transcribe(audio_bytes: bytes, mime_type: str, *, model: str = "",
+                    names: "list[str] | None" = None) -> str:
     from google import genai
     from google.genai import types
 
@@ -114,7 +118,8 @@ def _raw_transcribe(audio_bytes: bytes, mime_type: str, *, model: str = "") -> s
         contents=[
             types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
             "Transcribe this audio verbatim, in whatever language(s) are spoken. "
-            "Return only the transcript text - no commentary, no timestamps, no speaker labels.",
+            "Return only the transcript text - no commentary, no timestamps, no speaker labels."
+            + vocabulary_hint(names),
         ],
         config={"temperature": 0},
     )

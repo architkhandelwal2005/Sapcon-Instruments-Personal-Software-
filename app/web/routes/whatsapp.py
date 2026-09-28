@@ -34,6 +34,7 @@ from app.db import get_connection, release_connection
 from app.ingestion.failures import record_failure
 from app.ingestion.pipeline import append_correction, ingest_new_meeting
 from app.llm import transcribe_audio
+from app.transcription.vocabulary import known_names
 from app.phone import DEFAULT_CC, normalize_phone
 from app.query import ask as run_ask
 from app.whatsapp.client import download_media, send_whatsapp, valid_signature
@@ -402,7 +403,7 @@ def _handle_audio(conn, from_, media_id, logged_by, base, *, reply_to: Optional[
     audio_url = _keep_audio(audio_bytes, mime_type)
 
     try:
-        transcript = transcribe_audio(audio_bytes, mime_type)
+        transcript = transcribe_audio(audio_bytes, mime_type, known_names(conn))
     except Exception as exc:
         record_failure(conn, date.today(), audio_url, None, exc)
         exc.note_was_saved = bool(audio_url)
