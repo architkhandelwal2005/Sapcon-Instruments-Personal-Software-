@@ -3,6 +3,8 @@ already return, not a dump of the full read-back (the sender already has the
 audio/photo they just sent; the long formatter is for the web meeting page).
 """
 
+import re
+
 from app.capture.pipeline import CaptureResult
 from app.ingestion.pipeline import IngestResult
 from app.query import AskResult
@@ -44,10 +46,44 @@ def capture_reply(result: CaptureResult, capture_type: str, review_url: str) -> 
     return "\n".join(lines)
 
 
+# Reference markers belong in the citations list, where the website renders
+# them as links to the row. Sent to a phone they are noise - a real answer came
+# back reading "Call Priya back (Task [F1])" line after line. The prompt forbids
+# them; this is the guard for when the model does it anyway, because a leaked
+# marker is unreadable and stripping one is free.
+_MARKERS = re.compile(
+    r"\s*[\(\[]\s*(?:task|note|record|lead|decision)?\s*\[?[FN]?\d+\]?\s*"
+    r"(?:,\s*\"[^\"]*\")?\s*[\)\]]"
+    r"|\s*\[unreviewed\]",
+    re.IGNORECASE,
+)
+
+
+def _clean(text: str) -> str:
+    text = _MARKERS.sub("", text or "")
+    text = re.sub(r"[ \t]+([.,;:])", r"\1", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _fit(text: str, limit: int) -> str:
+    """Cut at a line, then at a sentence, and never mid-word. An answer that
+    stops at "forward it to Kanika..." leaves the reader unsure whether the
+    list ended or the message did."""
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    for boundary in ("\n", ". "):
+        cut = head.rfind(boundary)
+        if cut > limit * 0.6:
+            head = head[:cut]
+            break
+    else:
+        head = head.rsplit(" ", 1)[0]
+    return head.rstrip(" ,;-") + "\n\n(That is as much as fits here - the rest is on the website.)"
+
+
 def ask_reply(result: AskResult) -> str:
-    text = result.answer.text
-    if len(text) > _MAX_LEN:
-        text = text[:_MAX_LEN].rsplit(" ", 1)[0] + "..."
+    text = _fit(_clean(result.answer.text), _MAX_LEN)
     if result.answer.ungrounded_citations:
         text += f"\n\n({result.answer.ungrounded_citations} point(s) couldn't be matched to a transcript - double check those.)"
     return text
