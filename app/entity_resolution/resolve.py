@@ -5,6 +5,7 @@ from typing import Literal, Optional
 import psycopg
 
 from app.entity_resolution.llm_resolve import decide_match
+from app.entity_resolution.recency import recently_discussed
 from app.entity_resolution.matcher import find_candidates
 
 Outcome = Literal["linked", "created", "uncertain_created"]
@@ -54,7 +55,8 @@ def resolve_entity(
     """
     attrs = {k: (attrs or {}).get(k) for k in ENRICHABLE}
     candidates = find_candidates(conn, name, entity_type)
-    d = decide_match(name, entity_type, context, candidates)
+    d = decide_match(name, entity_type, context, candidates,
+                     recently=recently_discussed(conn))
 
     if d.decision == "match" and d.confidence == "high" and d.match_id:
         top = next(c for c in candidates if c.id == d.match_id)

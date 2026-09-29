@@ -19,7 +19,12 @@ Reply with JSON: {"decision": "match" | "new" | "uncertain", "match_id": <id or 
 Rules: only "match" if you are genuinely confident it's the same real-world entity (same person at \
 the same kind of company, or the same company under a spelling variant). If two candidates are \
 plausible, or you can't tell a common name apart, say "uncertain". Never guess a match to avoid \
-saying "new"."""
+saying "new".
+A candidate marked [discussed recently] was talked about in the last few days. People say a bare \
+first name for somebody already on their mind: "tell Vishal to call Rajesh on Monday", said the day \
+after a long note about Rajesh Sharma, means that Rajesh. Treat it as strong evidence when the \
+mentioned name is a single name with no surname, and as no evidence at all when the two names \
+differ in any way beyond one being shorter."""
 
 
 @dataclass
@@ -30,15 +35,25 @@ class MatchDecision:
     confidence: Literal["high", "medium", "low"]
 
 
-def decide_match(name: str, entity_type: str, context: str, candidates: list[Candidate]) -> MatchDecision:
+def decide_match(name: str, entity_type: str, context: str, candidates: list[Candidate],
+                 recently: Optional[set] = None) -> MatchDecision:
+    """`recently` is the names talked about in the last few days.
+
+    A bare first name almost always means somebody already on his mind, and
+    without knowing who that is the decision is a coin toss between two
+    strangers who share a name. That is how "tell Vishal to call Rajesh on
+    Monday" created a second Rajesh the day after a long note about Rajesh
+    Sharma."""
     if not candidates:
         return MatchDecision("new", None, "no similar existing entity", "high")
 
+    recent = {r.lower() for r in (recently or set())}
     cand_lines = "\n".join(
         f'  id={c.id} | "{c.canonical_name}" ({c.entity_type})'
         + (f' | title: {c.title}' if c.title else "")
         + (f' | region: {c.region}' if c.region else "")
         + (f' | aliases: {", ".join(c.aliases)}' if c.aliases else "")
+        + (" | [discussed recently]" if c.canonical_name.lower() in recent else "")
         for c in candidates
     )
     payload = (
