@@ -33,10 +33,11 @@ Action = Literal[
     "complete_task",
     "drop_lead",
     "undo",
+    "amend",        # fixing what was just recorded, rather than adding to it
     "chat",         # small talk, help, a clarifying question - reply and stop
 ]
 
-_ACTIONS = {"log", "ask", "correct_name", "assign_task", "complete_task",
+_ACTIONS = {"log", "ask", "correct_name", "amend", "assign_task", "complete_task",
             "drop_lead", "undo", "chat"}
 
 # A long message is never treated as chat, however conversational it reads. A
@@ -152,6 +153,12 @@ Actions:
   Foods not Pragmet", "her name is Kanika Chadha". Put the right spelling in "correct"
   and every wrong spelling he names in "wrong". This is a correction to a record, never
   a note to file.
+- "amend": he is correcting what you just read back to him - a task that should not be
+  there, a wrong due date, the wrong person owning something, a line that says the wrong
+  thing. "That second task is wrong", "the Parag quotation is due Thursday not Friday",
+  "Saurabh should not follow up with Anil, give it to Vishal", "Rajesh is not the
+  maintenance head, he is the projects head". The giveaway is that he is contradicting
+  or adjusting something already recorded, not reporting something new.
 - "assign_task": give an EXISTING task an owner. Needs "person".
 - "complete_task": mark an EXISTING task finished.
 - "drop_lead": stop pursuing a lead.

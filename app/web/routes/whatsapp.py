@@ -55,6 +55,7 @@ from app.whatsapp.commands import (
 )
 from app.agent import Plan, plan_message, recent, remember_turn, render
 from app.agent.amend import apply_amendments, meeting_items, plan_amendments
+from app.agent.recent_meeting import latest_readback
 from app.minutes.generate import fetch_meeting_minutes_data
 from app.whatsapp.readback import meeting_readback_reply
 from app.whatsapp.reply import ask_reply, capture_reply, failure_reply, meeting_reply
@@ -314,19 +315,27 @@ def _reply_to_readback(conn, from_, text, meeting_id, logged_by, base, *, audio_
         _handle_correction(conn, from_, plan, base)
         return
 
+    if _try_amend(conn, from_, text, meeting_id, logged_by, base):
+        return
+    _apply_correction(conn, from_, text, meeting_id, logged_by, base, audio_path=audio_path)
+
+
+def _try_amend(conn, from_, text, meeting_id, logged_by, base) -> bool:
+    """Change what that meeting recorded. False when the message corrects none
+    of its items, in which case the caller keeps the words instead."""
     items = meeting_items(conn, meeting_id)
     changes = plan_amendments(text, items, date.today().isoformat())
-    if changes:
-        applied = apply_amendments(conn, changes, items, actor_id=logged_by)
-        if applied:
-            finalise_meeting_status(conn, meeting_id)
-            conn.commit()
-            lines = ["Done - " + applied[0]] + applied[1:]
-            lines.append(f"{base}/meetings/{meeting_id}")
-            _say(conn, from_, "\n".join(lines))
-            return
-
-    _apply_correction(conn, from_, text, meeting_id, logged_by, base, audio_path=audio_path)
+    if not changes:
+        return False
+    applied = apply_amendments(conn, changes, items, actor_id=logged_by)
+    if not applied:
+        return False
+    finalise_meeting_status(conn, meeting_id)
+    conn.commit()
+    lines = ["Done - " + applied[0]] + applied[1:]
+    lines.append(f"{base}/meetings/{meeting_id}")
+    _say(conn, from_, "\n".join(lines))
+    return True
 
 
 def _carry_out(conn, from_, plan: Plan, text: str, logged_by, base, *, audio_path) -> None:
@@ -346,6 +355,18 @@ def _carry_out(conn, from_, plan: Plan, text: str, logged_by, base, *, audio_pat
 
     if plan.action == "correct_name":
         _handle_correction(conn, from_, plan, base)
+        return
+
+    if plan.action == "amend":
+        # A correction sent as a fresh message rather than as a reply, which is
+        # what anybody does from a car. Safe without the reply because the
+        # amendment pass can only name items from that one meeting, and answers
+        # nothing when the message corrects none of them.
+        recent_id = latest_readback(conn, re.sub(r"\D", "", from_ or ""))
+        if recent_id and _try_amend(conn, from_, text, recent_id, logged_by, base):
+            return
+        # Nothing matched, so it was new after all. Keep it.
+        _log_note(conn, from_, text, logged_by, base, audio_path=audio_path)
         return
 
     if plan.action == "undo":
