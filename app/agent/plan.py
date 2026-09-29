@@ -20,7 +20,7 @@ paraphrased.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from app.llm import complete_json
@@ -28,6 +28,7 @@ from app.llm import complete_json
 Action = Literal[
     "log",          # record what happened
     "ask",          # answer from the CRM
+    "correct_name", # this record's name is spelled wrong
     "assign_task",
     "complete_task",
     "drop_lead",
@@ -35,7 +36,8 @@ Action = Literal[
     "chat",         # small talk, help, a clarifying question - reply and stop
 ]
 
-_ACTIONS = {"log", "ask", "assign_task", "complete_task", "drop_lead", "undo", "chat"}
+_ACTIONS = {"log", "ask", "correct_name", "assign_task", "complete_task",
+            "drop_lead", "undo", "chat"}
 
 # A long message is never treated as chat, however conversational it reads. A
 # long message answered with a pleasantry is a visit thrown away; a long
@@ -123,6 +125,8 @@ class Plan:
     person: str = ""            # who a task should go to
     question: str = ""          # the question to answer, as asked
     reply: str = ""             # what to say, for "chat" only
+    correct: str = ""           # the right spelling of a name
+    wrong: list = field(default_factory=list)   # spellings it should replace
 
 
 _SYSTEM = """You are the assistant behind a sales CRM that a company's sales head talks
@@ -143,6 +147,11 @@ Actions:
   work, what happened somewhere, someone's number, a summary. Anything about the state
   of the work is "ask", however briefly he puts it: "what's left", "what's pending",
   "anything from Vishal", "status?", "where are we with Thermo". Short is not vague.
+- "correct_name": a name in the system is spelled wrong and he is telling you the right
+  one. "Marmik Sapovadia is the correct spelling, not Mark Sapadia", "it's Parag Milk
+  Foods not Pragmet", "her name is Kanika Chadha". Put the right spelling in "correct"
+  and every wrong spelling he names in "wrong". This is a correction to a record, never
+  a note to file.
 - "assign_task": give an EXISTING task an owner. Needs "person".
 - "complete_task": mark an EXISTING task finished.
 - "drop_lead": stop pursuing a lead.
@@ -155,6 +164,8 @@ Return JSON:
  "target": "<for the three change actions: his words naming the task or lead>",
  "person": "<for assign_task: who it goes to>",
  "question": "<for ask: the question, rewritten to stand alone if it was a follow-up>",
+ "correct": "<for correct_name: the right spelling>",
+ "wrong": ["<for correct_name: each wrong spelling he names>"],
  "reply": "<for chat only: what to say back>"}
 
 Rules that matter:
@@ -209,11 +220,17 @@ def plan_message(text: str, conversation: str) -> Plan:
         person=str(raw.get("person") or "").strip(),
         question=str(raw.get("question") or "").strip() or body,
         reply=str(raw.get("reply") or "").strip(),
+        correct=str(raw.get("correct") or "").strip(),
+        wrong=[str(w).strip() for w in (raw.get("wrong") or []) if str(w).strip()],
     )
 
     # A change action with nothing to match on cannot be carried out, and
     # guessing which row was meant is the one thing never allowed here.
     if plan.action in ("assign_task", "complete_task", "drop_lead") and not plan.target:
+        return Plan(action="log")
+    # A correction with no right spelling in it cannot correct anything, and
+    # filing it keeps what he said rather than dropping it.
+    if plan.action == "correct_name" and not plan.correct:
         return Plan(action="log")
     if plan.action == "assign_task" and not plan.person:
         return Plan(action="log")

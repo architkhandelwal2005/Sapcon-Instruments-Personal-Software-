@@ -31,6 +31,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from app.capture.pipeline import ingest_capture
 from app.capture.storage import upload_audio
 from app.db import get_connection, release_connection
+from app.entity_resolution.corrections import apply_name_correction
 from app.ingestion.failures import record_failure
 from app.ingestion.pipeline import append_correction, ingest_new_meeting
 from app.llm import transcribe_audio
@@ -148,10 +149,43 @@ def _say(conn, to: str, body: str) -> Optional[str]:
     return wa_message_id
 
 
+def _claim(conn, wa_message_id: str, sender: str) -> bool:
+    """Take this message, once. Returns False if it has already been taken.
+
+    Meta redelivers anything it is unsure we received, and a free instance that
+    takes fifty seconds to wake makes it unsure often. One voice note arrived
+    twice and became two meetings with two slightly different transcripts of
+    the same recording; one question was answered twice in the same chat. The
+    insert is the claim - it is atomic, so two deliveries racing each other
+    cannot both win.
+
+    A message with no id is processed rather than dropped: losing a note to be
+    tidy is the worse mistake."""
+    if not wa_message_id:
+        return True
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "insert into whatsapp_inbound (wa_message_id, sender) values (%s, %s) "
+                "on conflict (wa_message_id) do nothing returning wa_message_id",
+                (wa_message_id, sender),
+            )
+            claimed = cur.fetchone() is not None
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        return True     # the guard failing must not stop a real message
+    if not claimed:
+        print(f"ignoring a repeat delivery of {wa_message_id}", file=sys.stderr)
+    return claimed
+
+
 def _process_message(*, message: dict) -> None:
     from_ = message.get("from", "")
     conn = get_connection()
     try:
+        if not _claim(conn, message.get("id", ""), from_):
+            return
         logged_by = _lookup_sender(conn, from_)
         if logged_by is None:
             return  # not on the allowlist - silently ignore
@@ -232,6 +266,10 @@ def _carry_out(conn, from_, plan: Plan, text: str, logged_by, base, *, audio_pat
         _handle_ask(conn, from_, plan.question or text)
         return
 
+    if plan.action == "correct_name":
+        _handle_correction(conn, from_, plan, base)
+        return
+
     if plan.action == "undo":
         _handle_undo(conn, from_, base)
         return
@@ -261,6 +299,20 @@ def _log_note(conn, from_, text, logged_by, base, *, audio_path) -> None:
 
 
 UNDO_WINDOW_HOURS = 12
+
+
+def _handle_correction(conn, from_, plan, base) -> None:
+    """A name was heard wrong. Fixing the record is worth far more than filing
+    the sentence that reported it: the name is how every later mention finds
+    its way here."""
+    outcome = apply_name_correction(conn, plan.correct, plan.wrong)
+    lines = [outcome.summary]
+    if outcome.status == "ambiguous":
+        lines += [f"- {c['name']}" for c in outcome.candidates[:5]]
+        lines.append("Say which one, or fix it on the website.")
+    elif outcome.url_path:
+        lines.append(f"{base}{outcome.url_path}")
+    _say(conn, from_, "\n".join(lines))
 
 
 def _handle_undo(conn, from_, base) -> None:
