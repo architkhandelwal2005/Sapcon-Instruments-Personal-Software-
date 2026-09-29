@@ -81,8 +81,17 @@ def connect(conn: psycopg.Connection, a_id: str, b_id: str) -> tuple[str, str, Q
     return a_name, b_name, _answer(conn, question, notes, [a_id, b_id])
 
 
-def ask(conn: psycopg.Connection, question: str) -> AskResult:
-    mentions = resolve_mentions(conn, question)
+def ask(conn: psycopg.Connection, question: str, asked_as: str = "") -> AskResult:
+    """`question` may have been rewritten to stand alone - "and Konkan?" after
+    a question about somewhere else. `asked_as` is what he actually typed.
+
+    Who the question is about comes from his words; only the phrasing comes
+    from the rewrite. A rewrite that reaches for the wrong subject - and one
+    did, answering about Parag Milk Foods when he had asked "and Konkan?" -
+    then costs nothing, because the name he typed decides."""
+    mentions = resolve_mentions(conn, asked_as) if asked_as else []
+    if not mentions:
+        mentions = resolve_mentions(conn, question)
     took_as = None
     if not mentions:
         # Nothing matched the words as they were typed. The stored spelling
@@ -91,7 +100,7 @@ def ask(conn: psycopg.Connection, question: str) -> AskResult:
         # while Moksha Shah sat there with three records against him. A near
         # match is used but always named in the answer, so a wrong one is
         # visible rather than buried.
-        near = nearest_entity(conn, question)
+        near = nearest_entity(conn, asked_as) or nearest_entity(conn, question)
         if near is not None:
             mentions = [(near[0], near[1])]
             took_as = (near[2], near[1])

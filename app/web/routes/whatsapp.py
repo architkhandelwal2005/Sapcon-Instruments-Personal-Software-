@@ -350,7 +350,9 @@ def _carry_out(conn, from_, plan: Plan, text: str, logged_by, base, *, audio_pat
         return
 
     if plan.action == "ask":
-        _handle_ask(conn, from_, plan.question or text)
+        # Both: the rewrite makes a follow-up stand alone, his own words decide
+        # who it is about.
+        _handle_ask(conn, from_, plan.question or text, asked_as=text)
         return
 
     if plan.action == "correct_name":
@@ -377,11 +379,11 @@ def _carry_out(conn, from_, plan: Plan, text: str, logged_by, base, *, audio_pat
         command = ParsedCommand(action=plan.action, target=plan.target,
                                 person=plan.person or None)
         outcome = apply_command(conn, command)
-        if outcome.status == "not_found":
-            # He may be recording something new rather than pointing at a row
-            # that exists. Filing it keeps the note; guessing a row would not.
-            _log_note(conn, from_, text, logged_by, base, audio_path=audio_path)
-            return
+        # An instruction naming a row that does not exist used to be filed as a
+        # note instead. "Give the xyz task to Vishal" then became a meeting
+        # holding a task called "give the xyz task", owned by Vishal - the
+        # system inventing the very thing it had just failed to find. Saying it
+        # found nothing is both true and more use.
         _send_command_outcome(conn, from_, outcome, base, command=command)
         return
 
@@ -623,9 +625,9 @@ def _handle_photo(conn, from_, caption, media_id, logged_by, base) -> None:
     _say(conn, from_, capture_reply(result, capture_type, f"{base}/review/capture/{result.capture_event_id}"))
 
 
-def _handle_ask(conn, from_, question) -> None:
+def _handle_ask(conn, from_, question, asked_as: str = "") -> None:
     if not question:
         _say(conn, from_, "Ask me something, e.g. \"ask brief me on Priya Nair\".")
         return
-    result = run_ask(conn, question)
+    result = run_ask(conn, question, asked_as=asked_as)
     _say(conn, from_, ask_reply(result))
