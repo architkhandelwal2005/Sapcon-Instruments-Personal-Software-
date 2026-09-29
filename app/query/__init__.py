@@ -11,7 +11,7 @@ app.query.synthesize), so an answer can be traced back to something real.
 """
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 import psycopg
 
@@ -24,6 +24,7 @@ from app.query.retrieve import (
 )
 from app.query.budget import FACT_SHARE, MAX_CONTEXT_CHARS, pack_notes
 from app.query.facts import FactPack, build_fact_pack
+from app.query.nearby import nearest_entity
 from app.query.synthesize import QueryAnswer, answer_from_notes
 
 AskMode = Literal["brief", "connect", "general"]
@@ -35,6 +36,9 @@ class AskResult:
     mode: AskMode
     entities: list[tuple[str, str]]  # (id, name) resolved from the question
     answer: QueryAnswer
+    # (what he typed, who it was taken as) when no name matched exactly and a
+    # near one was used. Always shown, so a wrong guess is visible.
+    took_as: Optional[tuple] = None
 
 
 def _entity_name(conn: psycopg.Connection, entity_id: str) -> str:
@@ -79,6 +83,18 @@ def connect(conn: psycopg.Connection, a_id: str, b_id: str) -> tuple[str, str, Q
 
 def ask(conn: psycopg.Connection, question: str) -> AskResult:
     mentions = resolve_mentions(conn, question)
+    took_as = None
+    if not mentions:
+        # Nothing matched the words as they were typed. The stored spelling
+        # often came from a mishearing, so requiring an exact match asks him to
+        # reproduce a mistake: "what's pending with Mokshil" found nothing
+        # while Moksha Shah sat there with three records against him. A near
+        # match is used but always named in the answer, so a wrong one is
+        # visible rather than buried.
+        near = nearest_entity(conn, question)
+        if near is not None:
+            mentions = [(near[0], near[1])]
+            took_as = (near[2], near[1])
     ids = [eid for eid, _ in mentions]
 
     if len(ids) >= 2:
@@ -94,4 +110,4 @@ def ask(conn: psycopg.Connection, question: str) -> AskResult:
         mode = "general"
 
     return AskResult(question=question, mode=mode, entities=mentions,
-                     answer=_answer(conn, question, notes, ids))
+                     answer=_answer(conn, question, notes, ids), took_as=took_as)

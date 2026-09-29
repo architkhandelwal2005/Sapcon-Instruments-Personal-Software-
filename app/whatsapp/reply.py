@@ -84,6 +84,11 @@ def _fit(text: str, limit: int) -> str:
 
 def ask_reply(result: AskResult) -> str:
     text = _fit(_clean(result.answer.text), _MAX_LEN)
+    if getattr(result, "took_as", None):
+        # Named, never silent. If this took the wrong person, he can see that
+        # from the answer rather than trusting it.
+        typed, taken = result.took_as
+        text = f"(Taking \"{typed}\" as {taken}.)\n\n{text}"
     if result.answer.ungrounded_citations:
         text += f"\n\n({result.answer.ungrounded_citations} point(s) couldn't be matched to a transcript - double check those.)"
     return text
