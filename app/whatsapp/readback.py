@@ -235,7 +235,11 @@ def _compose(
             body.extend(rendered)
 
     body.append("")
-    body.append("Reply to this message to ADD anything I missed.")
+    # Says "reply to this message" because a reply is what attaches a
+    # correction to this meeting rather than starting a new one. Says voice
+    # note first because that is what he does.
+    body.append("Reply to this message - voice note or typed - to ADD anything "
+                "I missed, or to tell me a name is spelled wrong.")
     body.append(url)
     return "\n".join(body)
 

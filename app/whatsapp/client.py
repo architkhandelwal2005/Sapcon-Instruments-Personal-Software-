@@ -64,6 +64,46 @@ def send_whatsapp(to: str, body: str) -> str | None:
         return None
 
 
+# Meta's limits on an interactive message. A body longer than this is refused
+# outright, which is why a readback is sent as ordinary text first and the
+# buttons follow in a short message of their own.
+BUTTON_BODY_LIMIT = 1024
+BUTTON_LABEL_LIMIT = 20
+MAX_BUTTONS = 3
+
+
+def send_buttons(to: str, body: str, buttons: list) -> str | None:
+    """A message with tappable replies. `buttons` is [(id, label)].
+
+    Tapping one comes back through the webhook as an interactive message
+    carrying the id, so the id has to say what the tap means - a meeting to
+    confirm, for instance. It is never shown to the reader."""
+    url = f"{_GRAPH}/{GRAPH_VERSION}/{os.environ['WHATSAPP_PHONE_NUMBER_ID']}/messages"
+    payload = json.dumps({
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {"text": body[:BUTTON_BODY_LIMIT]},
+            "action": {"buttons": [
+                {"type": "reply", "reply": {"id": bid, "title": label[:BUTTON_LABEL_LIMIT]}}
+                for bid, label in buttons[:MAX_BUTTONS]
+            ]},
+        },
+    }).encode()
+    req = urllib.request.Request(
+        url, data=payload, method="POST",
+        headers={"Authorization": f"Bearer {_token()}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        raw = resp.read()
+    try:
+        return json.loads(raw)["messages"][0]["id"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
+
+
 def send_template(to: str, template: str, language: str = "en_US") -> str | None:
     """Open a conversation, rather than reply inside one.
 

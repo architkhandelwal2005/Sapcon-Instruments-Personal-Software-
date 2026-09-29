@@ -377,3 +377,73 @@ def apply_decision(
         finalise_meeting_status(conn, m)
     conn.commit()
     return meetings
+
+
+def confirm_meeting(conn: psycopg.Connection, meeting_id: str,
+                    actor_id: Optional[str] = None) -> dict:
+    """Confirm everything still pending on one meeting, in one go.
+
+    This is what the Confirm button on a read-back does. The person tapping it
+    is the person who recorded the note, reading back what was understood while
+    it is still fresh - which is a better check than the same items sitting in a
+    queue on a website nobody opens, and it is the only review most notes will
+    ever get.
+
+    It confirms; it never rejects. Anything wrong is corrected by saying so,
+    which is a different path with a different record. And a duplicate flag is
+    deliberately left standing: "this may be the same person as one we already
+    have" is not a question about what he said, it is a question about the rest
+    of the database, and he cannot answer it from a phone.
+    """
+    counts = {}
+    with conn.cursor() as cur:
+        for kind, table, clause in (
+            ("relation", "relations", "meeting_id = %(m)s"),
+            ("task", "tasks", "meeting_id = %(m)s"),
+            ("decision", "decisions", "meeting_id = %(m)s"),
+        ):
+            cur.execute(
+                f"update {table} set review_status = 'confirmed' "
+                f"where {clause} and review_status = 'pending' returning id",
+                {"m": meeting_id},
+            )
+            rows = cur.fetchall()
+            if rows:
+                counts[kind] = len(rows)
+                _log_many(cur, kind, rows, actor_id, meeting_id)
+
+        # Entities this meeting brought in or spoke about. A name flagged as a
+        # possible duplicate keeps its flag - see above.
+        cur.execute(
+            """
+            update entities e set review_status = 'confirmed'
+            where e.review_status = 'pending'
+              and e.possible_duplicate_of is null
+              and (e.id = (select primary_contact_id from meetings where id = %(m)s)
+                   or exists (select 1 from relations r where r.meeting_id = %(m)s
+                              and (r.source_id = e.id or r.target_id = e.id)
+                              and r.review_status <> 'rejected'))
+            returning e.id
+            """,
+            {"m": meeting_id},
+        )
+        rows = cur.fetchall()
+        if rows:
+            counts["entity"] = len(rows)
+            _log_many(cur, "entity", rows, actor_id, meeting_id)
+
+    status = finalise_meeting_status(conn, meeting_id)
+    conn.commit()
+    return {"counts": counts, "status": status,
+            "total": sum(counts.values())}
+
+
+def _log_many(cur, kind: str, rows, actor_id: Optional[str], meeting_id: str) -> None:
+    """One audit row per item, not one for the batch: a decision about a task is
+    a decision about that task, and a later question about it should find it."""
+    cur.executemany(
+        "insert into review_decisions (kind, item_id, decision, decided_by, note) "
+        "values (%s, %s, 'confirm', %s, %s)",
+        [(kind, str(r[0]), actor_id, f"confirmed from the WhatsApp read-back of meeting {meeting_id}")
+         for r in rows],
+    )

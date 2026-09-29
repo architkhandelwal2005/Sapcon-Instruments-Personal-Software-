@@ -38,7 +38,8 @@ from app.llm import transcribe_audio
 from app.transcription.vocabulary import known_names
 from app.phone import DEFAULT_CC, normalize_phone
 from app.query import ask as run_ask
-from app.whatsapp.client import download_media, send_whatsapp, valid_signature
+from app.review import confirm_meeting
+from app.whatsapp.client import download_media, send_buttons, send_whatsapp, valid_signature
 from app.whatsapp.delivery import record_sent, record_status, statuses
 from app.commands import ParsedCommand
 from app.whatsapp.commands import (
@@ -219,6 +220,9 @@ def _dispatch(conn, from_, message: dict, logged_by) -> None:
         image = message.get("image") or {}
         _handle_photo(conn, from_, image.get("caption"), image.get("id"), logged_by, base)
         return
+    if kind == "interactive":
+        _handle_tap(conn, from_, message, logged_by, base)
+        return
     if kind != "text":
         _say(conn, from_, "That message type isn't supported yet - send a voice note, a photo, or text.")
         return
@@ -227,6 +231,41 @@ def _dispatch(conn, from_, message: dict, logged_by) -> None:
     if not text:
         return
     _route_words(conn, from_, text, logged_by, base, audio_path=None, reply_to=reply_to)
+
+
+def _handle_tap(conn, from_, message: dict, logged_by, base) -> None:
+    """A button was tapped. The id carries what the tap meant.
+
+    An unknown id is treated as words rather than ignored: a button from an
+    older version of this code, or one this version does not know, is still a
+    person trying to say something."""
+    reply = ((message.get("interactive") or {}).get("button_reply") or {})
+    button_id = reply.get("id") or ""
+
+    if button_id.startswith(CONFIRM_PREFIX):
+        _confirm_from_chat(conn, from_, button_id[len(CONFIRM_PREFIX):], logged_by, base)
+        return
+    _route_words(conn, from_, reply.get("title") or "", logged_by, base,
+                 audio_path=None, reply_to=_reply_to(message))
+
+
+def _confirm_from_chat(conn, from_, meeting_id: str, logged_by, base) -> None:
+    """Confirm everything still open on that meeting, as the person who tapped."""
+    try:
+        result = confirm_meeting(conn, meeting_id, actor_id=logged_by)
+    except Exception as exc:
+        conn.rollback()
+        print(f"confirm failed for {meeting_id}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        _say(conn, from_, "I could not confirm that just now. It is still saved - "
+                          f"try again, or use {base}/meetings/{meeting_id}.")
+        return
+
+    if not result["total"]:
+        _say(conn, from_, "That one was already confirmed - nothing left to check.")
+        return
+    what = ", ".join(f"{n} {kind}{'s' if n > 1 else ''}" for kind, n in result["counts"].items())
+    _say(conn, from_, f"Confirmed - {what}.\n\n"
+                      "Send me a voice note or a message any time if something needs changing.")
 
 
 def _route_words(conn, from_, text: str, logged_by, base, *, audio_path, reply_to: Optional[str]) -> None:
@@ -242,13 +281,30 @@ def _route_words(conn, from_, text: str, logged_by, base, *, audio_path, reply_t
 
     meeting_id = _correction_target(conn, reply_to)
     if meeting_id is not None:
-        _apply_correction(conn, from_, text, meeting_id, logged_by, base, audio_path=audio_path)
+        _reply_to_readback(conn, from_, text, meeting_id, logged_by, base, audio_path=audio_path)
         return
     if _handle_reply_to_pending(conn, from_, text, base, reply_to):
         return
 
     plan = plan_message(text, render(recent(conn, from_)))
     _carry_out(conn, from_, plan, text, logged_by, base, audio_path=audio_path)
+
+
+def _reply_to_readback(conn, from_, text, meeting_id, logged_by, base, *, audio_path) -> None:
+    """Something said back about a read-back we sent.
+
+    Almost always it is more to add, and appending is the only thing that
+    cannot lose it, so that is the default and anything the planner is unsure
+    about lands there. The exception is a name: "her name is Kanika Chadha, not
+    Chanda" is the commonest thing a read-back provokes, and appending it files
+    the sentence while leaving the wrong name exactly where it was. A name
+    correction is therefore carried out, because it is the one case where
+    adding the words does not do what he asked for."""
+    plan = plan_message(text, render(recent(conn, from_)))
+    if plan.action == "correct_name":
+        _handle_correction(conn, from_, plan, base)
+        return
+    _apply_correction(conn, from_, text, meeting_id, logged_by, base, audio_path=audio_path)
 
 
 def _carry_out(conn, from_, plan: Plan, text: str, logged_by, base, *, audio_path) -> None:
@@ -422,6 +478,40 @@ def _send_readback(conn, from_, result, base) -> None:
     wa_message_id = _say(conn, from_, body)
     if wa_message_id:
         _remember_thread(conn, wa_message_id, result.meeting_id, from_)
+    _offer_confirm(conn, from_, result.meeting_id, result.pending)
+
+
+CONFIRM_PREFIX = "confirm:"
+
+
+def _offer_confirm(conn, from_, meeting_id: str, pending: int) -> None:
+    """Put the review where the person who recorded the note actually is.
+
+    Everything heard is already written down - waiting for a tap before saving
+    would mean a note lost whenever he does not answer, which is most of the
+    time on the road. What waits is confirmation: uncertain items sit marked as
+    unreviewed in a queue on a website he will never open. Reading back what
+    was understood while it is still fresh in his head is a better check than
+    that queue, and for most notes it is the only one there will ever be.
+
+    Sent as its own short message because Meta refuses an interactive body over
+    a thousand characters and a read-back is routinely longer."""
+    if not pending:
+        return
+    body = (f"{pending} item(s) above are not confirmed yet.\n\n"
+            "Tap Confirm if that is right. If something is wrong or missing, "
+            "send me a voice note or a message saying so - I will fix it.")
+    try:
+        wa_message_id = send_buttons(from_, body,
+                                     [(f"{CONFIRM_PREFIX}{meeting_id}", "Confirm")])
+    except Exception as exc:
+        # Buttons are a convenience. Losing them must not cost the read-back
+        # that was already sent, nor the note behind it.
+        print(f"could not send the confirm button: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return
+    record_sent(conn, wa_message_id, from_)
+    if wa_message_id:
+        _remember_thread(conn, wa_message_id, meeting_id, from_)
 
 
 def _remember_thread(conn, wa_message_id: str, meeting_id: str, from_: str) -> None:
