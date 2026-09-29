@@ -67,6 +67,34 @@ _STOPWORDS = {
 }
 
 
+# Spelling similarity misses names that sound the same and are written
+# differently, which is most of the trouble here: these names reach the
+# database through a microphone. "Chanda" and "Chadha" share few trigrams and
+# the same metaphone. Entity resolution already scores this way at ingest; a
+# question deserves the same.
+PHONETIC_BONUS = 0.2
+
+
+def _with_sound(word: str, rows: list) -> list:
+    """Re-score on how the name sounds as well as how it is spelled."""
+    try:
+        import jellyfish
+    except ImportError:
+        return sorted(rows, key=lambda r: -r[2])
+
+    code = jellyfish.metaphone(word)
+    if not code:
+        return sorted(rows, key=lambda r: -r[2])
+
+    out = []
+    for entity_id, name, score in rows:
+        parts = [name] + name.split()
+        if any(jellyfish.metaphone(p) == code for p in parts if len(p) >= 3):
+            score = min(1.0, float(score) + PHONETIC_BONUS)
+        out.append((entity_id, name, float(score)))
+    return sorted(out, key=lambda r: -r[2])
+
+
 def _candidate_words(question: str) -> list[str]:
     """The words in a question that could be somebody's name."""
     words = []
@@ -104,27 +132,33 @@ def _nearest_among(conn: psycopg.Connection, words: list, types: list) -> Option
         with conn.cursor() as cur:
             cur.execute(
                 """
-                -- Against each part of the name as well as the whole of it.
-                -- "Marmik" compared with "Marmik Sapovadia" scores poorly for
-                -- the length difference alone, while people say one part of a
-                -- name constantly.
+                -- Against each part of the name and each alias, as well as the
+                -- whole of it. "Marmik" against "Marmik Sapovadia" scores
+                -- poorly for the length difference alone, while people say one
+                -- part of a name constantly - and an alias is usually the very
+                -- spelling that was heard wrong once already, which is exactly
+                -- what he is likely to type.
                 select e.id, e.canonical_name,
                        greatest(
                            similarity(lower(e.canonical_name), %(w)s),
                            coalesce((select max(similarity(lower(part), %(w)s))
                                      from unnest(string_to_array(e.canonical_name, ' ')) part
-                                     where length(part) >= 3), 0)
+                                     where length(part) >= 3), 0),
+                           coalesce((select max(similarity(lower(a), %(w)s))
+                                     from unnest(coalesce(e.aliases, '{}')) a), 0)
                        ) as score
                 from entities e
                 where e.review_status <> 'rejected' and e.merged_into is null
                   and e.entity_type = any(%(types)s)
                 order by score desc
-                limit 2
+                limit 8
                 """,
                 {"w": word, "types": types},
             )
-            floor = MIN_SIMILARITY_STAFF if types == ["employee"] else MIN_SIMILARITY
-            rows = [r for r in cur.fetchall() if r[2] >= floor]
+            rows = _with_sound(word, cur.fetchall())
+
+        floor = MIN_SIMILARITY_STAFF if types == ["employee"] else MIN_SIMILARITY
+        rows = [r for r in rows if r[2] >= floor][:2]
         if not rows:
             continue
         # Two names equally close to the same word: name both, pick neither.

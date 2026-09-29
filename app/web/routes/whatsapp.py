@@ -38,7 +38,7 @@ from app.llm import transcribe_audio
 from app.transcription.vocabulary import known_names
 from app.phone import DEFAULT_CC, normalize_phone
 from app.query import ask as run_ask
-from app.review import confirm_meeting
+from app.review import confirm_meeting, finalise_meeting_status
 from app.whatsapp.client import download_media, send_buttons, send_whatsapp, valid_signature
 from app.whatsapp.delivery import record_sent, record_status, statuses
 from app.commands import ParsedCommand
@@ -54,6 +54,7 @@ from app.whatsapp.commands import (
     undo_command,
 )
 from app.agent import Plan, plan_message, recent, remember_turn, render
+from app.agent.amend import apply_amendments, meeting_items, plan_amendments
 from app.minutes.generate import fetch_meeting_minutes_data
 from app.whatsapp.readback import meeting_readback_reply
 from app.whatsapp.reply import ask_reply, capture_reply, failure_reply, meeting_reply
@@ -293,17 +294,38 @@ def _route_words(conn, from_, text: str, logged_by, base, *, audio_path, reply_t
 def _reply_to_readback(conn, from_, text, meeting_id, logged_by, base, *, audio_path) -> None:
     """Something said back about a read-back we sent.
 
-    Almost always it is more to add, and appending is the only thing that
-    cannot lose it, so that is the default and anything the planner is unsure
-    about lands there. The exception is a name: "her name is Kanika Chadha, not
-    Chanda" is the commonest thing a read-back provokes, and appending it files
-    the sentence while leaving the wrong name exactly where it was. A name
-    correction is therefore carried out, because it is the one case where
-    adding the words does not do what he asked for."""
+    Three things it can be.
+
+    A name being wrong is fixed on the record. Appending "her name is Kanika
+    Chadha, not Chanda" files the sentence and leaves the wrong name where it
+    was, which is the opposite of what he asked for.
+
+    A change to something the read-back listed - drop that task, that date is
+    wrong, Vishal owns it - is carried out against that item. The meeting's
+    items are handed to the model by reference and it must answer in
+    references, so it can only touch what this meeting recorded, and a
+    reference it invents does nothing.
+
+    Everything else is new information, and is appended - which is what used to
+    happen to all of it. So a reply only gains ground here: anything not
+    recognised as a change is still kept."""
     plan = plan_message(text, render(recent(conn, from_)))
     if plan.action == "correct_name":
         _handle_correction(conn, from_, plan, base)
         return
+
+    items = meeting_items(conn, meeting_id)
+    changes = plan_amendments(text, items, date.today().isoformat())
+    if changes:
+        applied = apply_amendments(conn, changes, items, actor_id=logged_by)
+        if applied:
+            finalise_meeting_status(conn, meeting_id)
+            conn.commit()
+            lines = ["Done - " + applied[0]] + applied[1:]
+            lines.append(f"{base}/meetings/{meeting_id}")
+            _say(conn, from_, "\n".join(lines))
+            return
+
     _apply_correction(conn, from_, text, meeting_id, logged_by, base, audio_path=audio_path)
 
 
