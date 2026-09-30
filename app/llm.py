@@ -126,12 +126,24 @@ def _raw_transcribe(audio_bytes: bytes, mime_type: str, *, model: str = "",
     return (resp.text or "").strip()
 
 
-# A rate-limited call says how long to wait. The per-minute quota asks for a
-# few seconds and is worth sitting out; the per-day quota asks for a similar
-# number but keeps refusing all day, so a cap stops us waiting inside a webhook
-# for a call that will not succeed. Above the cap the caller gets the error and
-# records the note for a later retry instead.
-_RATE_LIMIT_WAIT_CAP = 30
+# Two rate limits wear the same 429 and mean opposite things. The per-minute
+# one clears in under a minute and is worth sitting out - one voice note can
+# spend a dozen calls in half a minute and trip it by itself. The per-day one
+# keeps refusing until it resets, so waiting inside a webhook achieves nothing.
+# Google names which in the error, so the wait follows the limit rather than a
+# single guessed ceiling.
+_MINUTE_LIMIT_WAIT_CAP = 70
+_OTHER_LIMIT_WAIT_CAP = 30
+
+_PER_DAY = re.compile(r"per\s*day|PerDay|daily", re.IGNORECASE)
+_PER_MINUTE = re.compile(r"per\s*minute|PerMinute|PerModelPerDay|RPM", re.IGNORECASE)
+
+
+def is_daily_limit(exc: Exception) -> bool:
+    """A quota that will not clear by waiting. Says so in the reply, because
+    "try again in a moment" is false and sends him round the same loop."""
+    text = str(exc)
+    return bool(_PER_DAY.search(text)) and not _PER_MINUTE.search(text)
 
 
 def _retry_after(exc: Exception) -> float | None:
@@ -140,11 +152,14 @@ def _retry_after(exc: Exception) -> float | None:
     text = str(exc)
     if "RESOURCE_EXHAUSTED" not in text and "429" not in text and "rate_limit" not in text:
         return None
+    if is_daily_limit(exc):
+        return None
     match = re.search(r"['\"]retryDelay['\"]:\s*['\"](\d+(?:\.\d+)?)s", text) or re.search(
         r"retry in (\d+(?:\.\d+)?)\s*s", text
     )
     wait = float(match.group(1)) + 1 if match else 5.0
-    return wait if wait <= _RATE_LIMIT_WAIT_CAP else None
+    cap = _MINUTE_LIMIT_WAIT_CAP if _PER_MINUTE.search(text) else _OTHER_LIMIT_WAIT_CAP
+    return wait if wait <= cap else None
 
 
 # Google answers 503 UNAVAILABLE ("this model is currently experiencing high

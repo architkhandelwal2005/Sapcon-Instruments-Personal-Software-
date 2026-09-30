@@ -106,6 +106,16 @@ def failure_reply(exc: Exception, *, saved: bool) -> str:
     busy = kind == "api_error" and _looks_busy(exc)
 
     if kind == "rate_limit":
+        from app.llm import is_daily_limit
+
+        if not is_daily_limit(exc):
+            # The per-minute limit, which one voice note can trip by itself.
+            # Saying "today's limit is used up" sends him away for the day over
+            # something that clears in under a minute.
+            if saved:
+                return ("Got your note and kept it. I was asked to slow down for a "
+                        "moment - it will be processed shortly, nothing is lost.")
+            return "Too many requests in one go - give me a minute and ask again."
         if saved:
             return ("Got it, but today's AI limit is used up - your note is saved "
                     "and will be processed once the limit resets.")

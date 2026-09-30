@@ -4,7 +4,7 @@ from typing import Literal, Optional
 
 import psycopg
 
-from app.entity_resolution.llm_resolve import decide_match
+from app.entity_resolution.llm_resolve import MatchDecision, decide_match
 from app.entity_resolution.recency import recently_discussed
 from app.entity_resolution.matcher import find_candidates
 
@@ -55,8 +55,18 @@ def resolve_entity(
     """
     attrs = {k: (attrs or {}).get(k) for k in ENRICHABLE}
     candidates = find_candidates(conn, name, entity_type)
-    d = decide_match(name, entity_type, context, candidates,
-                     recently=recently_discussed(conn))
+
+    exact = _exact_match(name, entity_type, candidates)
+    if exact is not None:
+        # The same name, spelled the same way, on the same kind of record. No
+        # judgement is involved, so asking a model is a call spent to be told
+        # what string equality already said - and a note naming eight people
+        # spends eight of them inside half a minute, which is what runs a
+        # per-minute quota out mid-voice-note.
+        d = MatchDecision("match", exact.id, "same name, same type", "high")
+    else:
+        d = decide_match(name, entity_type, context, candidates,
+                         recently=recently_discussed(conn))
 
     if d.decision == "match" and d.confidence == "high" and d.match_id:
         top = next(c for c in candidates if c.id == d.match_id)
@@ -141,3 +151,28 @@ def _create_entity(conn, name, entity_type, attrs, confidence, review_status, po
         )
         (entity_id,) = cur.fetchone()
     return str(entity_id)
+
+
+def _exact_match(name: str, entity_type: str, candidates: list):
+    """A candidate whose name or alias is exactly this, ignoring case and
+    punctuation, and of the same type.
+
+    Only an exact hit qualifies. Anything short of that - a missing surname, a
+    different spelling, a similar-sounding name - is a judgement about two real
+    people, which is the decision a model is here to make and the one that can
+    fuse two customers' histories if it is made carelessly.
+    """
+    wanted = _flatten(name)
+    if not wanted:
+        return None
+    for c in candidates:
+        if c.entity_type != entity_type:
+            continue
+        names = [c.canonical_name] + list(c.aliases or [])
+        if any(_flatten(n) == wanted for n in names):
+            return c
+    return None
+
+
+def _flatten(text: str) -> str:
+    return "".join(ch for ch in (text or "").lower() if ch.isalnum())
