@@ -64,6 +64,11 @@ a date. relative_due is EITHER an offset (amount + unit "day"/"week"/"month": "n
 1, unit "week") OR a named day of the week (weekday: "call him on Monday" -> weekday "monday"), \
 never both - a named day is not an offset, and forcing it into one gets the date wrong. Omit \
 relative_due if no timeframe.
+An instruction to STOP doing something is not a task: "stop following up on them", "close that \
+enquiry", "leave it for now", "band kar do". Nobody has to go and do anything, and recording it as \
+work to be done creates the opposite of what was asked. The same goes for something the customer \
+will do: "they will release the purchase order next month" is theirs, not ours. Record either of \
+those in the summary, and as a decision when it settles something, but never as a task.
 
 6. SUMMARY - a short, clean prose recap: who was met or who attended, what was discussed, what \
 matters. This is read by a human later.

@@ -83,6 +83,28 @@ def _best_matches(rows: list[tuple[str, str, str]], words: list[str]) -> list[tu
     return [(row_id, label) for hits, row_id, label in scored if hits == best]
 
 
+# Below this share of the words he said, the row that came back is a
+# coincidence rather than a choice. Two-thirds keeps "Konkan Dairy" for "Konkan
+# Dairy Products" and rejects "Deccan Wader" for "Deccan Ceramics".
+_ENOUGH_OF_THE_WORDS = 0.6
+
+
+def _is_weak(rows: list[tuple[str, str, str]], words: list[str]) -> bool:
+    """True when the best row matched only part of what he said.
+
+    "Drop Deccan Ceramics" found one open lead - a list row reading "NACL, SRF,
+    Meghmani, Thermax, Adani, Barthi Pama, Deccan Wader" - on the strength of
+    the word "Deccan" alone, and dropped it. One row matching is not the same
+    as one row being meant.
+
+    No rows at all is not weak: that is "found nothing", a different answer
+    with a different reply."""
+    if len(words) < 2 or not rows:
+        return False
+    best = max(sum(1 for w in words if w in h.lower()) for _, _, h in rows)
+    return best < len(words) * _ENOUGH_OF_THE_WORDS
+
+
 def _find_tasks(conn: psycopg.Connection, target: str, *, open_only: bool = True) -> list[tuple[str, str]]:
     """Open tasks whose text, or whose customer's name, matches the words used."""
     words = _words(target)
@@ -111,10 +133,12 @@ def _find_tasks(conn: psycopg.Connection, target: str, *, open_only: bool = True
     return _best_matches(rows, words)
 
 
-def _find_leads(conn: psycopg.Connection, target: str) -> list[tuple[str, str]]:
+def _find_leads(conn: psycopg.Connection, target: str) -> tuple:
+    """(matches, weak). `weak` means the best row matched only part of what he
+    said, so one survivor is a coincidence rather than a choice."""
     words = _words(target)
     if not words:
-        return []
+        return [], False
     any_clause = " or ".join(f"e.canonical_name ilike %(w{i})s" for i in range(len(words)))
     params = {f"w{i}": f"%{w}%" for i, w in enumerate(words)}
     with conn.cursor() as cur:
@@ -129,13 +153,19 @@ def _find_leads(conn: psycopg.Connection, target: str) -> list[tuple[str, str]]:
             params,
         )
         rows = [(str(lid), name, name) for lid, name in cur.fetchall()]
-    return _best_matches(rows, words)
+    return _best_matches(rows, words), _is_weak(rows, words)
 
 
-def _ambiguous(action: str, what: str, found: list[tuple[str, str]]) -> CommandOutcome:
+def _ambiguous(action: str, what: str, found: list[tuple[str, str]],
+               *, weak: bool = False) -> CommandOutcome:
+    if weak and len(found) == 1:
+        # Saying "1 open leads match that" reads like a bug and hides the real
+        # point, which is that only part of what he said was found.
+        summary = f"Only a partial match for that - is this the {what} you mean?"
+    else:
+        summary = f"{len(found)} open {what}{'s' if len(found) != 1 else ''} match that."
     return CommandOutcome(
-        status="ambiguous", action=action,
-        summary=f"{len(found)} open {what}s match that.",
+        status="ambiguous", action=action, summary=summary,
         candidates=[Candidate(row_id=rid, label=label) for rid, label in found],
     )
 
@@ -217,12 +247,17 @@ def complete_task(conn: psycopg.Connection, task_id: str, label: str) -> Command
 
 
 def _drop_lead(conn: psycopg.Connection, command: ParsedCommand) -> CommandOutcome:
-    found = _find_leads(conn, command.target)
+    found, weak = _find_leads(conn, command.target)
     if not found:
         return CommandOutcome(status="not_found", action=command.action,
                               summary=f"No open lead matches \"{command.target}\".")
-    if len(found) > 1:
-        return _ambiguous(command.action, "lead", found)
+    # A partial match is offered rather than applied, even when only one row
+    # came back. Dropping is the one change here that is about a customer
+    # relationship rather than a line of work, and "Deccan Ceramics" quietly
+    # dropping a row that merely contains the word "Deccan" is the kind of
+    # mistake nobody notices until the customer calls.
+    if len(found) > 1 or weak:
+        return _ambiguous(command.action, "lead", found, weak=weak)
 
     lead_id, name = found[0]
     return drop_lead(conn, lead_id, name)
