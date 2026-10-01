@@ -42,18 +42,54 @@ def _row_status(confidence: Optional[str]) -> str:
 
 
 def _resolve_entities(conn, entities, transcript, on_resolved: OnResolved) -> dict:
-    """extracted name -> ResolutionResult"""
+    """extracted name -> ResolutionResult.
+
+    Every name in the note is decided in one model call rather than one each.
+    A note naming eight people used to spend eight calls in a few seconds, on
+    top of transcription, extraction, verification and the planner - which is
+    how a single voice note ran the per-minute quota out by itself.
+
+    A name the batch did not safely answer for is resolved on its own, exactly
+    as before. Nothing is assumed from a missing answer.
+    """
+    decisions = _decide_together(conn, entities, transcript)
+
     resolved: dict[str, ResolutionResult] = {}
     for e in entities:
         r = resolve_entity(
             conn, e.name, e.entity_type, transcript,
             extraction_confidence=e.confidence,
             attrs={"title": e.title, "phone": e.phone, "email": e.email, "region": e.region},
+            decided=decisions.get(e.name),
         )
         resolved[e.name] = r
         if on_resolved:
             on_resolved(e.name, r)
     return resolved
+
+
+def _decide_together(conn, entities, transcript) -> dict:
+    """One call for the whole note. Names that need no judgement - spelled
+    exactly like a record already held - are left out of it entirely, and names
+    with nothing to match against need no decision at all."""
+    from app.entity_resolution.batch import decide_many
+    from app.entity_resolution.matcher import find_candidates
+    from app.entity_resolution.recency import recently_discussed
+    from app.entity_resolution.resolve import _exact_match
+
+    to_decide = []
+    for e in entities:
+        candidates = find_candidates(conn, e.name, e.entity_type)
+        if not candidates or _exact_match(e.name, e.entity_type, candidates) is not None:
+            continue
+        to_decide.append((e.name, e.entity_type, candidates))
+
+    if len(to_decide) < 2:
+        return {}      # one name is one call either way
+    try:
+        return decide_many(to_decide, transcript, recently_discussed(conn))
+    except Exception:
+        return {}      # each name falls back to its own call
 
 
 def _resolve_ref(conn, resolved: dict, name: str, transcript: str, on_resolved: OnResolved, fallback: str = "company") -> str:

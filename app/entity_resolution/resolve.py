@@ -40,6 +40,7 @@ def resolve_entity(
     attrs: Optional[dict] = None,
     source: str = "meeting",
     capture_event_id: Optional[str] = None,
+    decided: Optional[MatchDecision] = None,
 ) -> ResolutionResult:
     """Resolve a mentioned name to an entities.id via LLM match decision.
     - confident match  -> link, add spelling as alias, fill any missing attrs
@@ -56,13 +57,15 @@ def resolve_entity(
     attrs = {k: (attrs or {}).get(k) for k in ENRICHABLE}
     candidates = find_candidates(conn, name, entity_type)
 
-    exact = _exact_match(name, entity_type, candidates)
-    if exact is not None:
+    if decided is not None:
+        # Already decided, in one call covering every name in this note. The id
+        # was checked against this name's own shortlist before it got here, so
+        # everything below applies to it unchanged.
+        d = decided
+    elif (exact := _exact_match(name, entity_type, candidates)) is not None:
         # The same name, spelled the same way, on the same kind of record. No
         # judgement is involved, so asking a model is a call spent to be told
-        # what string equality already said - and a note naming eight people
-        # spends eight of them inside half a minute, which is what runs a
-        # per-minute quota out mid-voice-note.
+        # what string equality already said.
         d = MatchDecision("match", exact.id, "same name, same type", "high")
     else:
         d = decide_match(name, entity_type, context, candidates,
