@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -64,6 +65,37 @@ async def require_login(request: Request, call_next):
 
     request.state.actor = actor
     return await call_next(request)
+
+
+@app.get("/health")
+def health():
+    """Is this running, is the database reachable, and which commit is serving?
+
+    The last part is the one worth having. Deploys here are triggered by hand,
+    so "I pushed the fix" and "the fix is live" have come apart more than once
+    and there was no way to tell them apart from outside. Render sets
+    RENDER_GIT_COMMIT on every build.
+
+    It is also the cheapest page in the app, which makes it the right thing for
+    an uptime pinger to hit - the free host sleeps after fifteen idle minutes
+    and takes most of a minute to wake up, which a voice note should not have
+    to wait for.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("select 1")
+            cur.fetchone()
+        database = "ok"
+    except Exception:
+        database = "unreachable"
+    finally:
+        release_connection(conn)
+    return {
+        "ok": database == "ok",
+        "database": database,
+        "commit": os.environ.get("RENDER_GIT_COMMIT", "")[:7],
+    }
 
 
 @app.get("/", response_class=HTMLResponse)

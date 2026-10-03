@@ -5,3 +5,4 @@ __pycache__/
 .agents/
 .claude/skills/
 skills-lock.json
+backups/
