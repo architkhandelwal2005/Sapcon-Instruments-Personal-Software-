@@ -1,8 +1,15 @@
 """Managing who can sign in. Owner only.
 
-There is no channel to send a setup code on - the Meta test number accepts five
-recipients in total - so the owner issues a code here and passes it to the
-person himself. The code is shown once and only its hash is kept.
+Adding somebody here does not give them a login; it gives their phone number
+permission to become one. They choose their own PIN the first time they sign
+in, which is why nothing on this page can show or set it - the owner never
+learns anybody's PIN, and Reset PIN only forgets the current one so the person
+chooses again.
+
+This is deliberately the only way in. The app answers on a public URL because
+the WhatsApp webhook has to reach it, so open registration would hand an
+employee login - their leads, and every customer reachable through them - to
+anyone who found the address.
 """
 
 
