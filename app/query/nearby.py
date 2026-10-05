@@ -17,6 +17,8 @@ from typing import Optional
 
 import psycopg
 
+from app.hinglish import FUNCTION_WORDS
+
 # Below this, "Mokshil" starts matching half the contact book. Chosen so that a
 # vowel or two out of place still lands (Mokshil/Moksha, Kanika Chanda/Kanika
 # Chadha) while an unrelated name does not.
@@ -64,7 +66,11 @@ _STOPWORDS = {
     "many", "much", "long", "soon", "here", "also", "just", "only", "still",
     "target", "targets", "order", "orders", "price", "prices", "sales", "site",
     "plant", "project", "projects", "product", "products", "enquiry", "enquiries",
-}
+} | FUNCTION_WORDS
+# He talks Hinglish, so the glue in a question is as often Hindi as English.
+# Only two of them collide with a real contact today - "magar" with Amol Magar,
+# "shaniwar" with Shubhankar Shani - but both would have answered confidently
+# about the wrong person, which is the failure this list exists to prevent.
 
 
 # Spelling similarity misses names that sound the same and are written

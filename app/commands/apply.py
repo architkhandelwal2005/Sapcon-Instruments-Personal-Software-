@@ -17,6 +17,7 @@ import psycopg
 
 from app.commands.parse import ParsedCommand
 from app.entity_resolution.employees import find_employee_by_spoken_name
+from app.hinglish import FUNCTION_WORDS
 
 Status = Literal["applied", "ambiguous", "not_found", "no_person", "already"]
 
@@ -55,7 +56,12 @@ def apply_command(conn: psycopg.Connection, command: ParsedCommand) -> CommandOu
 _FILLER = {
     "task", "tasks", "item", "thing", "one", "lead", "leads", "follow", "followup",
     "follow-up", "the", "that", "this", "for", "with", "and", "about", "from",
-}
+} | FUNCTION_WORDS
+# Without the Hindi, this is where a clear instruction got refused. Scoring
+# keeps a match only if it covers 60% of the meaningful words, and "Rajesh wala
+# task band kar do" offered four - three of them grammar that no English task
+# description contains. One honest hit on "rajesh" read as a partial match, so
+# the instruction was turned down while "Rajesh task" was carried out.
 
 
 def _words(target: str) -> list[str]:

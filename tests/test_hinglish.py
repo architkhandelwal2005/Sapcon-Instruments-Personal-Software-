@@ -162,3 +162,79 @@ class TestWhatHappensToAnUnreadableNameInPractice:
         result, _ = _resolve(monkeypatch, "Rakesh Agarwal")
         assert result.outcome == "created"
         assert result.review_status == "auto_confirmed"
+
+
+class TestAHindiInstructionFindsItsTask:
+    """The regression that prompted the word list.
+
+    Scoring keeps a match only when it covers 60% of the meaningful words.
+    Hindi grammar counted as meaningful and never appears in an English task
+    description, so one honest hit read as a partial match and the instruction
+    was refused - while the same instruction in English was carried out.
+    """
+
+    TASKS = [("t1", "Call Rajesh Sharma about the flow meter quotation",
+                    "call rajesh sharma about the flow meter quotation"),
+             ("t2", "Send technical specification to Parag Milk Foods",
+                    "send technical specification to parag milk foods")]
+
+    def _acts_on(self, target):
+        from app.commands.apply import _best_matches, _is_weak, _words
+
+        words = _words(target)
+        matches = _best_matches(self.TASKS, words)
+        if not matches or _is_weak(self.TASKS, words):
+            return None
+        return matches[0][0] if len(matches) == 1 else "ambiguous"
+
+    def test_the_hindi_version_now_works(self):
+        assert self._acts_on("Rajesh wala task band kar do") == "t1"
+
+    def test_so_does_a_longer_one(self):
+        assert self._acts_on("Rajesh ka flow meter wala kaam") == "t1"
+
+    def test_and_the_other_task_is_still_reachable(self):
+        assert self._acts_on("Parag Milk Foods ko spec bhej diya") == "t2"
+
+    def test_the_english_version_is_unchanged(self):
+        assert self._acts_on("Rajesh task") == "t1"
+        assert self._acts_on("the Rajesh one") == "t1"
+
+    def test_the_words_that_name_the_task_still_count(self):
+        """Over-inclusive is safe for grammar and fatal for content: if "flow"
+        or "meter" were swallowed, two tasks about the same person could no
+        longer be told apart."""
+        from app.commands.apply import _words
+
+        assert _words("Rajesh ka flow meter wala kaam") == ["rajesh", "flow", "meter"]
+
+    def test_a_name_nobody_has_still_finds_nothing(self):
+        assert self._acts_on("Mahesh wala task band kar do") is None
+
+
+class TestHindiIsNotMistakenForSomebodysName:
+    def test_the_two_that_actually_collided(self):
+        """Measured against the real contact book: "magar" (but) scored 0.55
+        against Amol Magar and "shaniwar" (Saturday) 0.35 against Shubhankar
+        Shani. Both would have answered confidently about the wrong person."""
+        from app.query.nearby import _candidate_words
+
+        assert _candidate_words("magar woh shaniwar ko aaya tha") == []
+
+    def test_a_hindi_question_offers_only_the_real_name(self):
+        from app.query.nearby import _candidate_words
+
+        assert _candidate_words("Rajesh ka kya hua") == ["rajesh"]
+        assert _candidate_words("unka quotation bhej diya kya") == []
+        assert _candidate_words("is hafte kitna kaam hua") == []
+
+    def test_an_english_question_is_unchanged(self):
+        from app.query.nearby import _candidate_words
+
+        assert _candidate_words("whats pending with Mokshil") == ["mokshil"]
+        assert _candidate_words("how many calls did we make") == []
+
+    def test_a_hindi_question_about_a_company_still_finds_it(self):
+        from app.query.nearby import _candidate_words
+
+        assert _candidate_words("Parag Milk Foods ka kya status hai") == ["parag", "milk", "foods"]
