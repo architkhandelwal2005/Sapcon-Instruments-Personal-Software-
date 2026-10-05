@@ -11,7 +11,7 @@ import os
 import re
 import time
 
-from app.transcription.vocabulary import vocabulary_hint
+from app.transcription.prompt import transcription_prompt
 
 PROVIDER = os.environ.get("EXTRACTION_PROVIDER", "gemini").lower()
 
@@ -117,9 +117,7 @@ def _raw_transcribe(audio_bytes: bytes, mime_type: str, *, model: str = "",
         model=model or _GEMINI_MODEL,
         contents=[
             types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
-            "Transcribe this audio verbatim, in whatever language(s) are spoken. "
-            "Return only the transcript text - no commentary, no timestamps, no speaker labels."
-            + vocabulary_hint(names),
+            transcription_prompt(names),
         ],
         config={"temperature": 0},
     )

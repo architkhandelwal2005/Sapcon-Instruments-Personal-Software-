@@ -92,6 +92,21 @@ def resolve_entity(
             mentioned_name=name, entity_type=entity_type,
         )
 
+    if not candidates and _beyond_our_matching(name):
+        # Nothing was found to compare this against, and nothing would have
+        # been: both matchers read Latin letters, so a name written in another
+        # script scores zero against every record rather than scoring badly.
+        # "No candidates" normally means "genuinely new"; here it only means we
+        # are blind, and creating it as settled fact is how one customer ends
+        # up with a second record nobody knows about.
+        entity_id = _create_entity(conn, name, entity_type, attrs, extraction_confidence,
+                                   "pending", None, source, capture_event_id)
+        return ResolutionResult(
+            entity_id=entity_id, outcome="uncertain_created", canonical_name=name,
+            review_status="pending", mentioned_name=name, entity_type=entity_type,
+            reason="not written in Latin letters - cannot be matched against existing records",
+        )
+
     review_status = "auto_confirmed" if extraction_confidence == "high" and d.confidence == "high" else "pending"
     entity_id = _create_entity(conn, name, entity_type, attrs, extraction_confidence, review_status, None, source, capture_event_id)
     return ResolutionResult(
@@ -179,3 +194,19 @@ def _exact_match(name: str, entity_type: str, candidates: list):
 
 def _flatten(text: str) -> str:
     return "".join(ch for ch in (text or "").lower() if ch.isalnum())
+
+
+def _beyond_our_matching(name: str) -> bool:
+    """Does this name contain a letter neither matcher can read?
+
+    find_candidates scores a name two ways, and both are Latin: trigram
+    similarity over how it is spelled, and metaphone over how it sounds.
+    Devanagari defeats both at once - zero similarity, empty metaphone - and so
+    does any other non-Latin script, and so do the diacritics a careful
+    transliteration produces.
+
+    Checked per letter rather than per script: the half of "Rajesh
+    <devanagari>" that is readable can still pull up candidates, and a name
+    that is only partly readable is one we are only partly able to judge.
+    """
+    return any(ch.isalpha() and not ch.isascii() for ch in (name or ""))
