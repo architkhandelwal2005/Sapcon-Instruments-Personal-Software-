@@ -5,6 +5,14 @@ one of these transcripts.
 
 Rejected relations/tasks are not a retrieval path (that connection was judged
 wrong), but a meeting still comes in if the entity reaches it another way.
+
+Being named in the note is itself one of those ways, and for an internal
+meeting it is the only one: there is no outside primary contact, the
+connections are between people rather than companies, and the tasks are about
+work rather than accounts. Without it, "Indofil has a new project at Dahej"
+was unreachable from Indofil. A mention carries no review status because
+nothing about it was judged - he said the name, and that is a fact about the
+note rather than a claim about the business.
 """
 
 from dataclasses import dataclass
@@ -43,6 +51,8 @@ _TOUCHES = """
         where (source_id = %(e)s or target_id = %(e)s) and review_status <> 'rejected'
         union
         select meeting_id from tasks where related_entity_id = %(e)s and review_status <> 'rejected'
+        union
+        select meeting_id from meeting_mentions where entity_id = %(e)s
     )
 """
 

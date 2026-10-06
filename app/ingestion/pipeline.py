@@ -104,6 +104,30 @@ def _resolve_ref(conn, resolved: dict, name: str, transcript: str, on_resolved: 
     return r.entity_id
 
 
+def _write_mentions(conn, meeting_id, resolved: dict) -> None:
+    """Record which records this note named.
+
+    Every entity the note touched is already in `resolved` by the time this
+    runs - including the ones _resolve_ref created on the fly for a connection
+    or a task. Without this the association survives only where a relation or a
+    task happens to reference the entity, which an internal meeting never does.
+
+    Written after the body, so a name that only appeared as a task's target is
+    captured too. Re-running over the same meeting (a correction appends to it)
+    adds only what is new.
+    """
+    with conn.cursor() as cur:
+        cur.execute("select entity_id from meeting_mentions where meeting_id = %s", (meeting_id,))
+        already = {str(r[0]) for r in cur.fetchall()}
+        fresh = [eid for eid in dict.fromkeys(
+            r.entity_id for r in resolved.values() if r.entity_id) if eid not in already]
+        if fresh:
+            cur.executemany(
+                "insert into meeting_mentions (meeting_id, entity_id) values (%s,%s)",
+                [(meeting_id, eid) for eid in fresh],
+            )
+
+
 def _write_attendees(conn, meeting_id, names: list[str]) -> None:
     """Each attendee kept as heard; linked to an employee only on a confident
     match. A correction re-listing someone already recorded adds nothing."""
@@ -182,6 +206,10 @@ def _write_meeting_body(conn, result, resolved, on_resolved, meeting_id, meeting
                 )
             task_count += 1
             auto, pending = (auto + 1, pending) if status == "auto_confirmed" else (auto, pending + 1)
+
+    # Last, because the loops above resolve names of their own: a company that
+    # appears only as a task's target is in `resolved` by now and nowhere else.
+    _write_mentions(conn, meeting_id, resolved)
 
     return conn_count, task_count, decision_count, auto, pending
 
