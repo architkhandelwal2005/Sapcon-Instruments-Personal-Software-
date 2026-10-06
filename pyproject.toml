@@ -25,8 +25,10 @@ dependencies = [
 # PIN hashing. Those need no database and no model call, so the suite runs in
 # under a second and costs nothing against the Gemini daily quota.
 # pymupdf/pillow are for the local card-and-diary batch scripts only - the
-# deployed image takes photos from WhatsApp, never PDFs.
-dev = ["pytest>=8.0", "pymupdf>=1.24", "pillow>=10.0"]
+# deployed image takes photos from WhatsApp, never PDFs. xlrd reads the office
+# employee list, which is a genuine old .xls that openpyxl cannot open; also
+# local-only, and the sheet itself is never committed.
+dev = ["pytest>=8.0", "pymupdf>=1.24", "pillow>=10.0", "xlrd>=2.0"]
 
 # sentence-transformers (local MiniLM embeddings) deferred until step 3 shows
 # trigram + phonetic matching (jellyfish) actually misses matches it would catch —
