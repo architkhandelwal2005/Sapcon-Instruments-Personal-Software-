@@ -83,6 +83,31 @@ def _read_sheet(path: Path) -> list[dict]:
     return people
 
 
+_TITLE = re.compile(r"^(mr|mrs|ms|miss|dr|shri|smt)\.?\s*", re.IGNORECASE)
+# "Name -- 90983-75036", "Name - 8770506862", "Name --- 123". The office sends
+# these as pasted text as often as a spreadsheet, and the hyphens land both
+# between the name and the number and inside the number itself.
+_LINE = re.compile(r"^(?P<name>[^\d]+?)\s*-{1,3}\s*(?P<phone>[\d\s\-]+)$")
+
+
+def _read_text(path: Path) -> list[dict]:
+    """A pasted list, one person per line."""
+    people = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = re.sub(r"\s+", " ", raw).strip().rstrip(",.")
+        if not line:
+            continue
+        m = _LINE.match(line)
+        if not m:
+            print(f"  ignored, no name and number: {line!r}")
+            continue
+        name = _TITLE.sub("", m.group("name")).strip().rstrip(",")
+        digits = re.sub(r"\D", "", m.group("phone"))
+        if name and digits:
+            people.append({"name": name, "phone": digits, "email": ""})
+    return people
+
+
 def _match(name: str, roster: list[tuple]) -> tuple:
     """(entity_id, roster_name, how) or (None, None, reason).
 
@@ -184,7 +209,7 @@ def main() -> None:
             "It holds personal phone numbers and is kept out of the repository, "
             "so point at your own copy:\n"
             '    import_employees.py --file "path/to/Employee List for Visiting Cards.xls"')
-    people = _read_sheet(sheet)
+    people = _read_text(sheet) if sheet.suffix.lower() in (".txt", ".csv") else _read_sheet(sheet)
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -239,12 +264,22 @@ def main() -> None:
 
         created = updated = logins = pins = 0
         with conn.cursor() as cur:
-            for p, digits, eid, _canonical, _how in matched:
+            for p, digits, eid, canonical, _how in matched:
+                # Take the fuller name, not simply the newest. A later list
+                # gave "Vedant" against a roster "Vedant B." and "Sandeep Dube"
+                # against "Sandeep Dubey" - accepting those would throw away a
+                # surname and make the roster worse than it was. The shorter
+                # spelling is kept as an alias, so a note that says it still
+                # lands on this person.
+                better = p["name"] if len(p["name"]) > len(canonical) else canonical
+                other = canonical if better == p["name"] else p["name"]
                 cur.execute(
                     "update entities set canonical_name = %s, "
+                    "aliases = case when %s = any(aliases) or %s = canonical_name "
+                    "               then aliases else array_append(aliases, %s) end, "
                     "phone = coalesce(phone, %s), email = coalesce(nullif(email,''), %s) "
                     "where id = %s",
-                    (p["name"], digits, p["email"] or None, eid),
+                    (better, other, other, other, digits, p["email"] or None, eid),
                 )
                 updated += 1
             for p, digits, _c in new:
