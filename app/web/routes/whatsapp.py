@@ -38,7 +38,7 @@ from app.llm import transcribe_audio
 from app.transcription.vocabulary import known_names
 from app.phone import DEFAULT_CC, normalize_phone
 from app.query import ask as run_ask
-from app.review import confirm_meeting, finalise_meeting_status
+from app.review import confirm_meeting, finalise_meeting_status, pending_for_meeting
 from app.whatsapp.client import download_media, send_buttons, send_whatsapp, valid_signature
 from app.whatsapp.delivery import record_sent, record_status, statuses
 from app.commands import ParsedCommand
@@ -523,7 +523,11 @@ def _send_readback(conn, from_, result, base) -> None:
     wa_message_id = _say(conn, from_, body)
     if wa_message_id:
         _remember_thread(conn, wa_message_id, result.meeting_id, from_)
-    _offer_confirm(conn, from_, result.meeting_id, result.pending)
+    # Asked of the database rather than taken from the ingest counts: those
+    # count only what the meeting owns, and a meeting can be held for review
+    # by a contact hanging off it instead.
+    _offer_confirm(conn, from_, result.meeting_id,
+                   pending_for_meeting(conn, result.meeting_id))
 
 
 CONFIRM_PREFIX = "confirm:"

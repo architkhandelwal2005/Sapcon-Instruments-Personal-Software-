@@ -154,3 +154,45 @@ class TestTheBackfillRefusesToGuess:
         text = "Pooja Pandit will handle it"
         short, long = _spans(text, "Pooja"), _spans(text, "Pooja Pandit")
         assert not _only_inside_a_longer_name(long, short + long)
+
+
+class TestTheConfirmButtonMatchesTheMeetingsStatus:
+    """A meeting held for review must be a meeting he can settle.
+
+    Two counts disagreed. The Confirm button was offered on a count of pending
+    relations, tasks and decisions; the meeting's own status also counted the
+    contacts hanging off it. A real note about competitors produced two
+    confirmed relations, seven confirmed decisions and one low-confidence
+    company - nothing owned was pending, so no button was sent, and the meeting
+    sat marked for review with no way to clear it from his phone.
+    """
+
+    def test_both_counts_read_the_same_definition(self):
+        from app.review import _PENDING_ANY, _PENDING_ATTACHED, _PENDING_OWNED
+
+        assert _PENDING_OWNED in _PENDING_ANY
+        assert _PENDING_ATTACHED in _PENDING_ANY
+
+    def test_the_count_includes_a_contact_hanging_off_a_relation(self):
+        """The exact shape that slipped through."""
+        from app.review import _PENDING_ANY
+
+        assert "from entities e" in _PENDING_ANY
+        assert "from relations r" in _PENDING_ANY
+
+    def test_the_count_includes_every_kind_the_meeting_owns(self):
+        from app.review import _PENDING_ANY
+
+        for table in ("relations", "tasks", "decisions"):
+            assert f"from {table} where meeting_id" in _PENDING_ANY
+
+    def test_the_webhook_asks_the_database_not_the_ingest_counts(self):
+        """result.pending counts only what the meeting owns, so reading it here
+        is what caused the mismatch."""
+        import inspect
+
+        from app.web.routes import whatsapp
+
+        source = inspect.getsource(whatsapp._send_readback)
+        assert "pending_for_meeting" in source
+        assert "result.pending" not in source

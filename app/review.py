@@ -25,24 +25,43 @@ _PENDING_OWNED = """
 """
 
 
+_PENDING_ATTACHED = """
+    select 1 from entities e where e.review_status = 'pending' and (
+        e.id = (select primary_contact_id from meetings where id = %(m)s)
+        or exists (
+            select 1 from relations r
+            where r.meeting_id = %(m)s and (r.source_id = e.id or r.target_id = e.id)
+              and r.review_status <> 'rejected'
+        )
+    )
+"""
+
+# One definition of "this meeting still has something unreviewed", because two
+# of them disagreed. The WhatsApp Confirm button was offered on a count of
+# pending relations, tasks and decisions, while the meeting's own status also
+# counted the contacts hanging off it. A note about competitors produced two
+# confirmed relations, seven confirmed decisions and one low-confidence
+# company - nothing owned was pending, so no button was sent, and the meeting
+# sat marked for review with no way to clear it from his phone.
+_PENDING_ANY = _PENDING_OWNED + "\n union all \n" + _PENDING_ATTACHED
+
+
+def pending_for_meeting(conn: psycopg.Connection, meeting_id: str) -> int:
+    """How many items on this meeting are still unreviewed.
+
+    Whatever makes a meeting count as pending must be what the person is asked
+    to confirm; anything else leaves him holding a meeting he cannot settle.
+    """
+    with conn.cursor() as cur:
+        cur.execute(f"select count(*) from ({_PENDING_ANY}) as unreviewed", {"m": meeting_id})
+        return cur.fetchone()[0]
+
+
 def finalise_meeting_status(conn: psycopg.Connection, meeting_id: str) -> str:
     """Set meetings.review_status to 'pending' while the meeting still has any
-    pending relation, task, or attached entity; 'clear' once all are settled.
-    Stamps reviewed_at the moment it first goes clear. Returns the new status."""
-    pending_items = (
-        _PENDING_OWNED
-        + """
-        union all
-        select 1 from entities e where e.review_status = 'pending' and (
-            e.id = m.primary_contact_id
-            or exists (
-                select 1 from relations r
-                where r.meeting_id = %(m)s and (r.source_id = e.id or r.target_id = e.id)
-                  and r.review_status <> 'rejected'
-            )
-        )
-        """
-    )
+    pending relation, task, decision or attached entity; 'clear' once all are
+    settled. Stamps reviewed_at the moment it first goes clear."""
+    pending_items = _PENDING_ANY
     with conn.cursor() as cur:
         cur.execute(
             f"""
