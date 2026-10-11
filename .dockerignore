@@ -7,3 +7,7 @@ __pycache__/
 .claude/
 documents/
 tests/
+# Whole-database exports: 1,724 people's phone numbers and emails.
+# These must never be baked into an image that gets pushed to a host.
+backups/
+*.json.gz
