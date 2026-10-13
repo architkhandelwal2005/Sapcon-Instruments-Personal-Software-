@@ -22,6 +22,7 @@ response is sent.
 import os
 import re
 import sys
+from contextlib import contextmanager
 from datetime import date
 from typing import Optional
 from uuid import uuid4
@@ -183,6 +184,57 @@ def _claim(conn, wa_message_id: str, sender: str) -> bool:
     return claimed
 
 
+# Namespaces the advisory lock below, so it can never collide with a lock some
+# other part of the system takes on the same hashed text.
+_SENDER_LOCK = 7531
+
+
+@contextmanager
+def _one_at_a_time(conn, sender: str):
+    """Let one person's messages be worked on one at a time.
+
+    Each message is handled in the background, so two voice notes sent a few
+    seconds apart run side by side. Both resolve names against the same
+    contact book, and when both mention a company nobody has recorded yet,
+    each looks, finds nothing, and creates it - two records of one customer,
+    which is exactly what entity resolution exists to prevent.
+
+    He sends notes back to back between meetings, so this is the realistic
+    case rather than an edge one. Holding a lock per sender makes the second
+    note wait for the first; different people are never made to wait on each
+    other.
+
+    A Postgres lock rather than a Python one: uvicorn starts as many workers as
+    WEB_CONCURRENCY says, and a lock in one process means nothing to another.
+    The connection is on Supabase's session pooler, where a session-level lock
+    stays with the backend it was taken on. It must be released before the
+    connection goes back to the pool - the next borrower would otherwise
+    inherit it - and it is released by Postgres anyway if the process dies.
+    """
+    with conn.cursor() as cur:
+        cur.execute("select pg_advisory_lock(%s, hashtext(%s))", (_SENDER_LOCK, sender))
+    conn.commit()
+    try:
+        yield
+    finally:
+        try:
+            # A failed transaction refuses every statement until it is rolled
+            # back, the unlock included. Rolling back loses nothing: any work
+            # worth keeping was committed by the code that did it.
+            conn.rollback()
+            with conn.cursor() as cur:
+                cur.execute("select pg_advisory_unlock(%s, hashtext(%s))", (_SENDER_LOCK, sender))
+            conn.commit()
+        except Exception as exc:
+            # A connection still holding the lock must not go back to the
+            # pool, or the next request to borrow it would hold this person's
+            # lock forever. Closing it ends the session, which is what
+            # releases a session-level lock in Postgres.
+            print(f"could not release the sender lock: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            conn.close()
+
+
 def _process_message(*, message: dict) -> None:
     from_ = message.get("from", "")
     conn = get_connection()
@@ -192,14 +244,15 @@ def _process_message(*, message: dict) -> None:
         logged_by = _lookup_sender(conn, from_)
         if logged_by is None:
             return  # not on the allowlist - silently ignore
-        try:
-            _dispatch(conn, from_, message, logged_by)
-        except Exception as exc:
-            # The note paths persist to ingestion_failures before re-raising and
-            # mark the exception as such; a lookup has nothing to keep, and the
-            # reply must not claim otherwise.
-            _say(conn, from_, failure_reply(exc, saved=getattr(exc, "note_was_saved", False)))
-            raise
+        with _one_at_a_time(conn, from_):
+            try:
+                _dispatch(conn, from_, message, logged_by)
+            except Exception as exc:
+                # The note paths persist to ingestion_failures before re-raising
+                # and mark the exception as such; a lookup has nothing to keep,
+                # and the reply must not claim otherwise.
+                _say(conn, from_, failure_reply(exc, saved=getattr(exc, "note_was_saved", False)))
+                raise
     finally:
         release_connection(conn)
 
@@ -285,7 +338,7 @@ def _route_words(conn, from_, text: str, logged_by, base, *, audio_path, reply_t
     if meeting_id is not None:
         _reply_to_readback(conn, from_, text, meeting_id, logged_by, base, audio_path=audio_path)
         return
-    if _handle_reply_to_pending(conn, from_, text, base, reply_to):
+    if _handle_reply_to_pending(conn, from_, text, base, reply_to, logged_by):
         return
 
     plan = plan_message(text, render(recent(conn, from_)))
@@ -372,13 +425,13 @@ def _carry_out(conn, from_, plan: Plan, text: str, logged_by, base, *, audio_pat
         return
 
     if plan.action == "undo":
-        _handle_undo(conn, from_, base)
+        _handle_undo(conn, from_, base, logged_by)
         return
 
     if plan.action in ("assign_task", "complete_task", "drop_lead"):
         command = ParsedCommand(action=plan.action, target=plan.target,
                                 person=plan.person or None)
-        outcome = apply_command(conn, command)
+        outcome = apply_command(conn, command, actor_id=logged_by)
         # An instruction naming a row that does not exist used to be filed as a
         # note instead. "Give the xyz task to Vishal" then became a meeting
         # holding a task called "give the xyz task", owned by Vishal - the
@@ -416,7 +469,7 @@ def _handle_correction(conn, from_, plan, base) -> None:
     _say(conn, from_, "\n".join(lines))
 
 
-def _handle_undo(conn, from_, base) -> None:
+def _handle_undo(conn, from_, base, logged_by=None) -> None:
     """"undo" said on its own, rather than as a reply to the change itself.
 
     Only a recent change, and only once. An undo means "that thing you just
@@ -438,7 +491,7 @@ def _handle_undo(conn, from_, base) -> None:
         _say(conn, from_, "Nothing recent of mine to undo. If you need an older change "
                           f"reversed, it is on {base}/tasks.")
         return
-    outcome = undo_command(conn, row[1]["token"])
+    outcome = undo_command(conn, row[1]["token"], actor_id=logged_by)
     with conn.cursor() as cur:
         cur.execute("update whatsapp_pending set used_at = now() where wa_message_id = %s",
                     (row[0],))
@@ -446,7 +499,8 @@ def _handle_undo(conn, from_, base) -> None:
     _say(conn, from_, command_reply(outcome, base))
 
 
-def _handle_reply_to_pending(conn, from_, text: str, base, reply_to: Optional[str]) -> bool:
+def _handle_reply_to_pending(conn, from_, text: str, base, reply_to: Optional[str],
+                             logged_by=None) -> bool:
     """A reply to something the bot is waiting on: a number picking one of the
     tasks it offered, or "undo" on a change it just made. Returns whether this
     message was one of those."""
@@ -455,7 +509,7 @@ def _handle_reply_to_pending(conn, from_, text: str, base, reply_to: Optional[st
         return False
 
     if pending["kind"] == "undo" and is_undo(text):
-        outcome = undo_command(conn, pending["payload"]["token"])
+        outcome = undo_command(conn, pending["payload"]["token"], actor_id=logged_by)
         with conn.cursor() as cur:
             # Spent, so replying "undo" to the same message twice cannot put a
             # row back to a state it has since been moved on from.
@@ -470,7 +524,7 @@ def _handle_reply_to_pending(conn, from_, text: str, base, reply_to: Optional[st
         index = parse_choice(text, len(candidates))
         if index is None:
             return False  # not a number - treat it as a fresh message
-        outcome = apply_choice(conn, pending["payload"], index)
+        outcome = apply_choice(conn, pending["payload"], index, actor_id=logged_by)
         _send_command_outcome(conn, from_, outcome, base)
         return True
     return False

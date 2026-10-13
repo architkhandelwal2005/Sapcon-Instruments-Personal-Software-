@@ -11,6 +11,20 @@
   {% if entity.review_status == "pending" %}<div><span class="badge badge-pending">unconfirmed - in review queue</span></div>{% endif %}
 </div>
 
+{% if actor and actor.role != 'employee' %}
+<details class="card edit-panel">
+  <summary>Edit details</summary>
+  <form method="post" action="/entities/{{ entity.id }}/edit" class="ingest-form">
+    {% for field, label in editable_fields %}
+      <label>{{ label }}
+        <input type="text" name="{{ field }}" value="{{ entity[field] or '' }}"{% if field == 'canonical_name' %} required{% endif %}>
+      </label>
+    {% endfor %}
+    <div class="review-actions"><button type="submit" class="btn-confirm">Save</button></div>
+  </form>
+</details>
+{% endif %}
+
 {% if entity.notes %}
   <div class="card"><strong>Notes</strong><pre class="notes">{{ entity.notes }}</pre></div>
 {% endif %}
@@ -22,13 +36,17 @@
       <p>This entity couldn't be confidently matched and was created new - it might be the same as
         <a class="entity-link" href="/entities/{{ f.other_entity_id }}">{{ f.other_entity_name }}</a>
         (flagged {{ f.created_at.date() }}).</p>
+      {% include "_flag_actions.html" %}
     {% endfor %}
     {% for f in review_flags.as_target %}
       <p><a class="entity-link" href="/entities/{{ f.other_entity_id }}">{{ f.other_entity_name }}</a>
         was created separately but might be the same as this entity (flagged {{ f.created_at.date() }}).</p>
+      {% include "_flag_actions.html" %}
     {% endfor %}
   </div>
 {% endif %}
+
+{% include "_changes.html" %}
 
 <h2>Interaction history</h2>
 <div class="card">

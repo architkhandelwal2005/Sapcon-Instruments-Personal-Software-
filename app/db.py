@@ -36,6 +36,8 @@ def release_connection(conn: psycopg.Connection) -> None:
     on a read-only path, which leaves the transaction open (psycopg3 has no
     autocommit by default) - roll it back here so the pool doesn't do it
     itself and log a warning on nearly every request."""
-    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+    # A closed connection has nothing to roll back, and trying raises. The pool
+    # discards closed connections on return, which is the point of closing one.
+    if not conn.closed and conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
         conn.rollback()
     _get_pool().putconn(conn)

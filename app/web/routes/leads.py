@@ -14,10 +14,12 @@ from typing import Optional
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from app import history
 from app.db import get_connection, release_connection
 from app.web.routes.entities import fetch_entity, fetch_interaction_history
 from app.web.auth import actor_of
 from app.web.authz import employee_owns_lead
+from app.web.routes.history import with_undo
 from app.web.templating import templates
 
 router = APIRouter()
@@ -152,12 +154,14 @@ def create_lead(
     if not name:
         return RedirectResponse("/leads/new?error=Enter a name", status_code=303)
 
-    due = None
+    # Empty means the person cleared it. Unreadable means leave it alone -
+    # treating a garbled date as "clear" would quietly delete the real one.
+    due, due_readable = None, True
     if next_follow_up_due.strip():
         try:
             due = datetime.strptime(next_follow_up_due.strip(), "%Y-%m-%d").date()
         except ValueError:
-            due = None
+            due_readable = False
 
     conn = get_connection()
     try:
@@ -194,7 +198,7 @@ def create_lead(
 
 
 @router.get("/leads/{lead_id}", response_class=HTMLResponse)
-def lead_detail(request: Request, lead_id: str, done: Optional[int] = None):
+def lead_detail(request: Request, lead_id: str):
     actor = actor_of(request)
     conn = get_connection()
     try:
@@ -221,7 +225,8 @@ def lead_detail(request: Request, lead_id: str, done: Optional[int] = None):
              next_follow_up_due, notes, created_at, status_changed_at, status_changed_by_name) = row
 
         entity = fetch_entity(conn, str(entity_id))
-        history = fetch_interaction_history(conn, str(entity_id), actor=actor)
+        meetings = fetch_interaction_history(conn, str(entity_id), actor=actor)
+        changes = history.recent(conn, "lead", lead_id)
         employees = [] if actor.is_employee() else _employee_options(conn)
     finally:
         release_connection(conn)
@@ -235,7 +240,8 @@ def lead_detail(request: Request, lead_id: str, done: Optional[int] = None):
     return templates.TemplateResponse(
         request,
         "lead_detail.html",
-        {"lead": lead, "history": history, "employees": employees, "statuses": STATUSES, "done": done},
+        {"lead": lead, "history": meetings, "changes": changes, "employees": employees,
+         "statuses": STATUSES},
     )
 
 
@@ -244,35 +250,41 @@ def update_lead_status(
     request: Request,
     lead_id: str,
     status: str = Form(...),
-    changed_by: str = Form(default=""),
     next_follow_up_due: str = Form(default=""),
     notes: str = Form(default=""),
 ):
+    """Who made the change comes from the session. The form used to carry a
+    "who's updating this" dropdown, from before there were logins - which let
+    anybody record a change as anybody else."""
     if status not in STATUSES:
         return RedirectResponse(f"/leads/{lead_id}", status_code=303)
 
-    due = None
+    # Empty means the person cleared it. Unreadable means leave it alone -
+    # treating a garbled date as "clear" would quietly delete the real one.
+    due, due_readable = None, True
     if next_follow_up_due.strip():
         try:
             due = datetime.strptime(next_follow_up_due.strip(), "%Y-%m-%d").date()
         except ValueError:
-            due = None
+            due_readable = False
 
     actor = actor_of(request)
     conn = get_connection()
     try:
         if actor.is_employee() and not employee_owns_lead(conn, actor, lead_id):
             return RedirectResponse("/leads?error=That+lead+is+not+yours", status_code=303)
-        with conn.cursor() as cur:
-            cur.execute(
-                "update leads set status = %s, status_changed_at = now(), status_changed_by = %s, "
-                "next_follow_up_due = coalesce(%s, next_follow_up_due), "
-                "notes = case when %s <> '' then %s else notes end "
-                "where id = %s",
-                (status, (changed_by or None), due, notes.strip(), notes.strip(), lead_id),
-            )
+        # The form shows the current follow-up date and notes, so whatever comes
+        # back is what the person wants: unchanged changes nothing, and an
+        # emptied box clears the field. Each is undoable.
+        who = actor.entity_id
+        change_ids = [
+            history.change(conn, "lead", lead_id, "status", status, actor_id=who),
+            history.change(conn, "lead", lead_id, "next_follow_up_due", due, actor_id=who)
+            if due_readable else None,
+            history.change(conn, "lead", lead_id, "notes", notes, actor_id=who),
+        ]
         conn.commit()
     finally:
         release_connection(conn)
 
-    return RedirectResponse(f"/leads/{lead_id}?done=1", status_code=303)
+    return with_undo(f"/leads/{lead_id}", *change_ids)

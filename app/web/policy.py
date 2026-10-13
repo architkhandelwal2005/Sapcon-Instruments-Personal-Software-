@@ -43,6 +43,7 @@ POLICY: dict[str, tuple[str, ...]] = {
     "/meetings": ALL,           # a single meeting; the log itself is EXACT above
     "/captures/new": ALL,
     "/entities": ALL,           # a row check in the handler decides which ones
+    "/history": ALL,            # undo; an employee may only undo their own changes
 
     # The whole book and the relationship graph are the asset that leaves with
     # someone who leaves.

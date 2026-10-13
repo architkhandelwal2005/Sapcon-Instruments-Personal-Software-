@@ -94,7 +94,8 @@ def parse_choice(text: str, count: int) -> Optional[int]:
     return picked - 1 if 1 <= picked <= count else None
 
 
-def apply_choice(conn: psycopg.Connection, payload: dict, index: int) -> CommandOutcome:
+def apply_choice(conn: psycopg.Connection, payload: dict, index: int,
+                 actor_id: Optional[str] = None) -> CommandOutcome:
     """Carry out the instruction on the row that was picked."""
     chosen = payload["candidates"][index]
     row_id, label = chosen["row_id"], chosen["label"]
@@ -105,10 +106,10 @@ def apply_choice(conn: psycopg.Connection, payload: dict, index: int) -> Command
         if employee is None:
             return CommandOutcome(status="no_person", action=action,
                                   summary=f"Nobody on the team matches \"{payload.get('person')}\".")
-        return assign_task_to(conn, row_id, employee[0], employee[1], label)
+        return assign_task_to(conn, row_id, employee[0], employee[1], label, actor_id)
     if action == "complete_task":
-        return complete_task(conn, row_id, label)
-    return drop_lead(conn, row_id, label)
+        return complete_task(conn, row_id, label, actor_id)
+    return drop_lead(conn, row_id, label, actor_id)
 
 
 def is_undo(text: str) -> bool:

@@ -1,14 +1,17 @@
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 
+from app import history
 from app.db import get_connection, release_connection
+from app.entity_resolution.merge import merge_entities
 from app.entity_resolution.review_queue import fetch_flags_for_entity
 from app.graph.entity_view import fetch_entity_connections
 from app.minutes.generate import TaskRow, fetch_meeting_minutes_data, fetch_task_assignees
 from app.web.helpers import with_overdue_flags
 from app.web.auth import actor_of
 from app.web.authz import employee_can_see_entity, visible_meeting_clause
+from app.web.routes.history import with_undo
 from app.web.templating import templates
 
 router = APIRouter()
@@ -104,11 +107,12 @@ def view_entity(request: Request, entity_id: str):
             # 404 rather than 403: which customers exist is itself the asset.
             raise HTTPException(status_code=404, detail="No such contact")
         entity = fetch_entity(conn, entity_id)
-        history = fetch_interaction_history(conn, entity_id, actor=actor)
+        meetings = fetch_interaction_history(conn, entity_id, actor=actor)
         commitments = _fetch_open_commitments(conn, entity_id)
         connections = fetch_entity_connections(conn, entity_id)
         review_flags = fetch_flags_for_entity(conn, entity_id)
-        last_meeting = fetch_meeting_minutes_data(conn, history[0]["id"]) if history else None
+        last_meeting = fetch_meeting_minutes_data(conn, meetings[0]["id"]) if meetings else None
+        changes = history.recent(conn, "contact", entity_id)
     finally:
         release_connection(conn)
 
@@ -117,7 +121,9 @@ def view_entity(request: Request, entity_id: str):
         "entity_profile.html",
         {
             "entity": entity,
-            "history": history,
+            "history": meetings,
+            "changes": changes,
+            "editable_fields": EDITABLE,
             "commitments": commitments,
             "connections": connections,
             "review_flags": review_flags,
@@ -158,3 +164,108 @@ def view_contour(request: Request, entity_id: str):
             "connections": connections_sorted,
         },
     )
+
+
+# --------------------------------------------------------------------------
+# fixing a contact by hand
+#
+# Staff only, decided here rather than in the policy table: /entities is open
+# to employees for reading the customers they reach through their own work, and
+# correcting the shared contact book is not theirs to do.
+
+EDITABLE = [("canonical_name", "Name"), ("phone", "Phone"), ("email", "Email"),
+            ("title", "Title"), ("region", "Region")]
+
+
+def _staff_only(request: Request):
+    actor = actor_of(request)
+    if actor.is_employee():
+        raise HTTPException(status_code=404, detail="No such contact")
+    return actor
+
+
+@router.post("/entities/{entity_id}/edit")
+async def edit_entity(request: Request, entity_id: str):
+    """Correct a contact's details. Every field changed is logged and undoable,
+    and a corrected name keeps the old spelling as an alias so voice notes that
+    use it still find this contact."""
+    actor = _staff_only(request)
+    form = await request.form()
+    conn = get_connection()
+    try:
+        change_ids = []
+        for field, _label in EDITABLE:
+            if field not in form:
+                continue
+            value = str(form[field])
+            if field == "canonical_name" and not value.strip():
+                continue    # a contact cannot be left without a name
+            change_ids.append(history.change(conn, "contact", entity_id, field, value,
+                                             actor_id=actor.entity_id))
+        conn.commit()
+    finally:
+        release_connection(conn)
+    return with_undo(f"/entities/{entity_id}", *change_ids)
+
+
+def _flag(conn, flag_id: str):
+    with conn.cursor() as cur:
+        cur.execute(
+            "select entity_id, possible_duplicate_of from entity_review_queue "
+            "where id = %s and not coalesce(resolved, false)",
+            (flag_id,),
+        )
+        return cur.fetchone()
+
+
+@router.post("/entities/flags/{flag_id}/merge")
+def merge_flagged(request: Request, flag_id: str, back: str = Form(default="")):
+    """The two records are one person. The older record is kept - it is the one
+    the rest of the book already points at - and the newer one's history moves
+    into it, with its name kept as an alias.
+
+    Not undoable from a button, deliberately: unpicking a merge means deciding
+    which of the moved meetings, tasks and leads belonged to which person, and
+    that cannot be done mechanically. The page asks before it does this."""
+    actor = _staff_only(request)
+    conn = get_connection()
+    try:
+        row = _flag(conn, flag_id)
+        if row is None:
+            conn.rollback()
+            return RedirectResponse(back or "/review", status_code=303)
+        new_id, existing_id = str(row[0]), str(row[1])
+        result = merge_entities(conn, existing_id, new_id, actor_id=actor.entity_id)
+    finally:
+        release_connection(conn)
+    return RedirectResponse(f"/entities/{result.kept_id}", status_code=303)
+
+
+@router.post("/entities/flags/{flag_id}/distinct")
+def mark_distinct(request: Request, flag_id: str, back: str = Form(default="")):
+    """Two different people who happen to look alike. Both records stay, and
+    the question stops being asked."""
+    actor = _staff_only(request)
+    conn = get_connection()
+    try:
+        row = _flag(conn, flag_id)
+        if row is not None:
+            new_id, existing_id = str(row[0]), str(row[1])
+            with conn.cursor() as cur:
+                cur.execute("update entity_review_queue set resolved = true where id = %s",
+                            (flag_id,))
+                cur.execute(
+                    "update entities set possible_duplicate_of = null "
+                    "where id = %s and possible_duplicate_of = %s",
+                    (new_id, existing_id),
+                )
+                cur.execute(
+                    "insert into review_decisions (kind, item_id, decision, decided_by, note) "
+                    "values ('entity', %s, 'distinct', %s, %s)",
+                    (new_id, actor.entity_id, f"not the same as {existing_id}"),
+                )
+        conn.commit()
+    finally:
+        release_connection(conn)
+    target = back if back.startswith("/") and not back.startswith("//") else "/review"
+    return RedirectResponse(target, status_code=303)

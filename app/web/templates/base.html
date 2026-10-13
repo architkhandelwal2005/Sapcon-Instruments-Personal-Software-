@@ -30,6 +30,25 @@
     {% endif %}
   </header>
   <main class="{% block main_class %}{% endblock %}">
+    {# One undo bar for every page: an edit redirects back with ?undo=<ids>,
+       so no page needs undo code of its own. The words are fixed rather than
+       taken from the link, so nobody can craft a URL that makes this site say
+       something it did not. #}
+    {% set q = request.query_params if request else {} %}
+    {% if q.get('undo') %}
+      <div class="flash">
+        <span>Saved.</span>
+        <form method="post" action="/history/undo">
+          <input type="hidden" name="ids" value="{{ q.get('undo') }}">
+          <input type="hidden" name="back" value="{{ request.url.path }}">
+          <button type="submit">Undo</button>
+        </form>
+      </div>
+    {% elif q.get('undone') %}
+      <div class="flash {% if q.get('undone') != 'done' %}flash-warn{% endif %}">
+        <span>{{ undo_words.get(q.get('undone'), 'Done.') }}</span>
+      </div>
+    {% endif %}
     {% block content %}{% endblock %}
   </main>
 </body>

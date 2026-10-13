@@ -1,0 +1,17 @@
+{# Answering "might these two be the same person?" where the question is shown.
+   Merge is the one action on the site that cannot be undone - unpicking it
+   means deciding which moved meeting belonged to whom - so the browser asks
+   first. "Different people" is safe either way. Staff only; the server checks
+   the same. #}
+{% if actor and actor.role != 'employee' %}
+<div class="review-actions flag-actions">
+  <form method="post" action="/entities/flags/{{ f.id }}/merge"
+        onsubmit="return confirm('Merge these two records into one? This cannot be undone.');">
+    <button type="submit" class="btn-confirm">Same person - merge</button>
+  </form>
+  <form method="post" action="/entities/flags/{{ f.id }}/distinct">
+    <input type="hidden" name="back" value="{{ request.url.path }}">
+    <button type="submit">Different people</button>
+  </form>
+</div>
+{% endif %}

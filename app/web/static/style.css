@@ -645,3 +645,29 @@ table.listing th, table.listing td {
   font-size: 0.92rem;
 }
 table.listing td.actions { display: flex; gap: 0.4rem; }
+
+/* --- undo bar, change history, edit panel ------------------------------ */
+
+.flash { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.flash form { margin: 0; }
+.flash button {
+  background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+  padding: 0.35rem 0.9rem; cursor: pointer; font: inherit;
+}
+.flash-warn { background: var(--hearsay-bg); border-color: var(--hearsay); }
+
+ul.changes { list-style: none; margin: 0; padding: 0; }
+ul.changes li {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem 0.8rem;
+  padding: 0.45rem 0; border-bottom: 1px solid var(--border);
+}
+ul.changes li:last-child { border-bottom: 0; }
+ul.changes li.undone > span:first-child { text-decoration: line-through; color: var(--muted); }
+ul.changes .meta { color: var(--muted); font-size: 0.85rem; }
+ul.changes form.inline-form { margin-left: auto; }
+
+details.edit-panel > summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+details.edit-panel[open] > summary { margin-bottom: 0.8rem; }
+
+.flag-actions { margin: 0.5rem 0 1rem; }
+.flag-actions form { margin: 0; }

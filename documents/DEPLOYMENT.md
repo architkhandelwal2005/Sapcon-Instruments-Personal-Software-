@@ -141,3 +141,32 @@ uncle's number and each employee's number once their real phone numbers are know
 
 Both Railway and Render redeploy automatically on every push to `main` once
 connected. No separate deploy step.
+
+## Keep-warm job (Supabase `pg_cron`)
+
+The free Render instance sleeps after 15 idle minutes and takes 30-50 seconds
+to wake, so the first voice note of the day waited that long. A scheduled job
+inside the Supabase database pings `/health` every 5 minutes during his working
+day, which keeps it awake.
+
+- Schedule: `*/5 1-16 * * *` in **UTC** = **06:30-22:25 IST**.
+- Deliberately not round the clock: the whole Render workspace shares 750 free
+  instance hours a month, and 24/7 would spend ~744 of them on this one service.
+  The window costs about 496.
+- Lives in the database, not the repo, so redeploying does not touch it.
+
+Run these in the Supabase SQL editor:
+
+```sql
+-- is it there, and is it on?
+select jobid, jobname, schedule, active from cron.job;
+
+-- did the last pings reach the site? (200 = awake, 503 = suspended)
+select created, status_code from net._http_response order by created desc limit 10;
+
+-- switch it off
+select cron.unschedule('keep-crm-awake');
+```
+
+If the app ever moves to a new URL, unschedule this and schedule it again
+against the new `/health` - otherwise it keeps waking the old one.

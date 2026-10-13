@@ -14,7 +14,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from app.db import get_connection, release_connection
 from app.minutes.generate import fetch_task_assignees
 from app.web.auth import actor_of
-from app.commands.apply import assign_task_to
+from app import history
+from app.web.routes.history import with_undo
 from app.web.authz import employee_owns_task
 from app.web.templating import templates
 
@@ -106,12 +107,12 @@ def update_task_status(request: Request, task_id: str, status: str = Form(...),
     try:
         if actor.is_employee() and not employee_owns_task(conn, actor, task_id):
             return RedirectResponse("/tasks?error=That+task+is+not+yours", status_code=303)
-        with conn.cursor() as cur:
-            cur.execute("update tasks set status = %s where id = %s", (status, task_id))
+        change_id = history.change(conn, "task", task_id, "status", status,
+                                   actor_id=actor.entity_id)
         conn.commit()
     finally:
         release_connection(conn)
-    return RedirectResponse(back, status_code=303)
+    return with_undo(back, change_id)
 
 
 @router.post("/tasks/{task_id}/assign")
@@ -129,17 +130,19 @@ def reassign_task(request: Request, task_id: str, employee_id: str = Form(...),
     conn = get_connection()
     try:
         if employee_id == "none":
-            with conn.cursor() as cur:
-                cur.execute("delete from task_assignees where task_id = %s", (task_id,))
-            conn.commit()
+            owners = []
         else:
             with conn.cursor() as cur:
-                cur.execute("select canonical_name from entities where id = %s", (employee_id,))
+                cur.execute("select canonical_name from entities where id = %s "
+                            "and entity_type = 'employee'", (employee_id,))
                 row = cur.fetchone()
-            conn.rollback()
             if row is None:
-                return RedirectResponse(back, status_code=303)
-            assign_task_to(conn, task_id, employee_id, row[0], "")
+                conn.rollback()
+                return with_undo(back)
+            owners = [{"employee_id": employee_id, "name": row[0]}]
+        change_id = history.change(conn, "task", task_id, "owners", owners,
+                                   actor_id=actor.entity_id)
+        conn.commit()
     finally:
         release_connection(conn)
-    return RedirectResponse(back, status_code=303)
+    return with_undo(back, change_id)

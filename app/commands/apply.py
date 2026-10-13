@@ -15,6 +15,7 @@ from typing import Literal, Optional
 
 import psycopg
 
+from app import history
 from app.commands.parse import ParsedCommand
 from app.entity_resolution.employees import find_employee_by_spoken_name
 from app.hinglish import FUNCTION_WORDS
@@ -39,12 +40,15 @@ class CommandOutcome:
     undo_token: Optional[str] = None        # put it back exactly
 
 
-def apply_command(conn: psycopg.Connection, command: ParsedCommand) -> CommandOutcome:
+def apply_command(conn: psycopg.Connection, command: ParsedCommand,
+                  actor_id: Optional[str] = None) -> CommandOutcome:
+    """`actor_id` is who sent the instruction, so the change log can say who
+    made the change."""
     if command.action == "assign_task":
-        return _assign_task(conn, command)
+        return _assign_task(conn, command, actor_id)
     if command.action == "complete_task":
-        return _complete_task(conn, command)
-    return _drop_lead(conn, command)
+        return _complete_task(conn, command, actor_id)
+    return _drop_lead(conn, command, actor_id)
 
 
 # --------------------------------------------------------------------------
@@ -180,7 +184,8 @@ def _ambiguous(action: str, what: str, found: list[tuple[str, str]],
 # the three changes
 
 
-def _assign_task(conn: psycopg.Connection, command: ParsedCommand) -> CommandOutcome:
+def _assign_task(conn: psycopg.Connection, command: ParsedCommand,
+                 actor_id: Optional[str] = None) -> CommandOutcome:
     employee = find_employee_by_spoken_name(conn, command.person or "")
     if employee is None:
         return CommandOutcome(status="no_person", action=command.action,
@@ -195,37 +200,31 @@ def _assign_task(conn: psycopg.Connection, command: ParsedCommand) -> CommandOut
         return _ambiguous(command.action, "task", found)
 
     task_id, label = found[0]
-    return assign_task_to(conn, task_id, employee_id, employee_name, label)
+    return assign_task_to(conn, task_id, employee_id, employee_name, label, actor_id)
 
 
 def assign_task_to(conn: psycopg.Connection, task_id: str, employee_id: str,
-                   employee_name: str, label: str) -> CommandOutcome:
+                   employee_name: str, label: str, actor_id: Optional[str] = None) -> CommandOutcome:
     """Replaces the owners rather than adding one: "assign it to Vishal" means
     Vishal owns it, not that Vishal joins whoever had it."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "select coalesce(employee_id::text, ''), name from task_assignees where task_id = %s",
-            (task_id,),
-        )
-        before = [{"employee_id": eid or None, "name": name} for eid, name in cur.fetchall()]
-        if len(before) == 1 and before[0]["employee_id"] == employee_id:
-            return CommandOutcome(status="already", action="assign_task", row_id=task_id,
-                                  url_path="/tasks",
-                                  summary=f"{employee_name} already owns \"{label}\".")
-        cur.execute("delete from task_assignees where task_id = %s", (task_id,))
-        cur.execute(
-            "insert into task_assignees (task_id, name, employee_id) values (%s, %s, %s)",
-            (task_id, employee_name, employee_id),
-        )
+    owners = [{"employee_id": employee_id, "name": employee_name}]
+    change_id = history.change(conn, "task", task_id, "owners", owners,
+                               actor_id=actor_id, via="whatsapp")
+    if change_id is None:
+        conn.rollback()
+        return CommandOutcome(status="already", action="assign_task", row_id=task_id,
+                              url_path="/tasks",
+                              summary=f"{employee_name} already owns \"{label}\".")
     conn.commit()
     return CommandOutcome(
         status="applied", action="assign_task", row_id=task_id, url_path="/tasks",
         summary=f"\"{label}\" is now {employee_name}'s.",
-        undo_token=_token("assign_task", task_id, {"assignees": before}),
+        undo_token=_token("assign_task", change_id),
     )
 
 
-def _complete_task(conn: psycopg.Connection, command: ParsedCommand) -> CommandOutcome:
+def _complete_task(conn: psycopg.Connection, command: ParsedCommand,
+                   actor_id: Optional[str] = None) -> CommandOutcome:
     found = _find_tasks(conn, command.target)
     if not found:
         return CommandOutcome(status="not_found", action=command.action,
@@ -234,25 +233,31 @@ def _complete_task(conn: psycopg.Connection, command: ParsedCommand) -> CommandO
         return _ambiguous(command.action, "task", found)
 
     task_id, label = found[0]
-    return complete_task(conn, task_id, label)
+    return complete_task(conn, task_id, label, actor_id)
 
 
-def complete_task(conn: psycopg.Connection, task_id: str, label: str) -> CommandOutcome:
-    with conn.cursor() as cur:
-        cur.execute("update tasks set status = 'done' where id = %s returning status", (task_id,))
-        if cur.fetchone() is None:
-            conn.rollback()
+def complete_task(conn: psycopg.Connection, task_id: str, label: str,
+                  actor_id: Optional[str] = None) -> CommandOutcome:
+    change_id = history.change(conn, "task", task_id, "status", "done",
+                               actor_id=actor_id, via="whatsapp")
+    if change_id is None:
+        exists = _exists(conn, "tasks", task_id)
+        conn.rollback()
+        if not exists:
             return CommandOutcome(status="not_found", action="complete_task",
                                   summary="That task no longer exists.")
+        return CommandOutcome(status="already", action="complete_task", row_id=task_id,
+                              summary=f"\"{label}\" is already done.")
     conn.commit()
     return CommandOutcome(
         status="applied", action="complete_task", row_id=task_id, url_path="/tasks",
         summary=f"\"{label}\" is marked done.",
-        undo_token=_token("complete_task", task_id, {"status": "open"}),
+        undo_token=_token("complete_task", change_id),
     )
 
 
-def _drop_lead(conn: psycopg.Connection, command: ParsedCommand) -> CommandOutcome:
+def _drop_lead(conn: psycopg.Connection, command: ParsedCommand,
+               actor_id: Optional[str] = None) -> CommandOutcome:
     found, weak = _find_leads(conn, command.target)
     if not found:
         return CommandOutcome(status="not_found", action=command.action,
@@ -266,70 +271,76 @@ def _drop_lead(conn: psycopg.Connection, command: ParsedCommand) -> CommandOutco
         return _ambiguous(command.action, "lead", found, weak=weak)
 
     lead_id, name = found[0]
-    return drop_lead(conn, lead_id, name)
+    return drop_lead(conn, lead_id, name, actor_id)
 
 
 def drop_lead(conn: psycopg.Connection, lead_id: str, name: str,
               actor_id: Optional[str] = None) -> CommandOutcome:
     """Dropping is a status change, never a delete - the lead keeps its history
     and can be reopened, the same rule the rest of the system follows."""
-    with conn.cursor() as cur:
-        cur.execute("select status from leads where id = %s", (lead_id,))
-        row = cur.fetchone()
-        if row is None:
-            conn.rollback()
+    change_id = history.change(conn, "lead", lead_id, "status", "dropped",
+                               actor_id=actor_id, via="whatsapp")
+    if change_id is None:
+        exists = _exists(conn, "leads", lead_id)
+        conn.rollback()
+        if not exists:
             return CommandOutcome(status="not_found", action="drop_lead",
                                   summary="That lead no longer exists.")
-        cur.execute(
-            "update leads set status = 'dropped', status_changed_at = now(), status_changed_by = %s "
-            "where id = %s",
-            (actor_id, lead_id),
-        )
+        return CommandOutcome(status="already", action="drop_lead", row_id=lead_id,
+                              summary=f"Lead \"{name}\" is already dropped.")
     conn.commit()
     return CommandOutcome(
         status="applied", action="drop_lead", row_id=lead_id, url_path=f"/leads/{lead_id}",
         summary=f"Lead \"{name}\" is dropped - it keeps its history and can be reopened.",
-        undo_token=_token("drop_lead", lead_id, {"status": row[0]}),
+        undo_token=_token("drop_lead", change_id),
     )
+
+
+def _exists(conn: psycopg.Connection, table: str, row_id: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(f"select 1 from {table} where id = %s", (row_id,))
+        return cur.fetchone() is not None
 
 
 # --------------------------------------------------------------------------
 # undo
 
 
-def _token(action: str, row_id: str, before: dict) -> str:
-    return json.dumps({"action": action, "row_id": row_id, "before": before}, default=str)
+def _token(action: str, change_id: int) -> str:
+    return json.dumps({"action": action, "change_ids": [change_id]})
 
 
-def undo_command(conn: psycopg.Connection, token: str) -> CommandOutcome:
-    """Put a row back the way it was. Reads only the recorded previous state,
-    so an undo cannot itself pick the wrong row."""
+_UNDONE = {
+    "assign_task": "Put the task's owner back.",
+    "complete_task": "The task is open again.",
+    "drop_lead": "The lead is back to open.",
+}
+
+
+def undo_command(conn: psycopg.Connection, token: str,
+                 actor_id: Optional[str] = None) -> CommandOutcome:
+    """Put a change back, through the same change log the website uses.
+
+    It used to restore the recorded previous state unconditionally, which
+    overwrote anything done in between: undo "marked done" after someone else
+    had reassigned the task, and their reassignment went too. Now an undo is
+    refused when the row has moved on, and says so.
+
+    The token itself is the authority - it was sent only to the person who made
+    the change, and only they can reply to it - so ownership is not rechecked.
+    """
     try:
         data = json.loads(token)
-        action, row_id, before = data["action"], data["row_id"], data["before"]
+        action, change_ids = data["action"], data["change_ids"]
     except (ValueError, KeyError, TypeError):
         return CommandOutcome(status="not_found", action="undo", summary="Nothing to undo.")
 
-    with conn.cursor() as cur:
-        if action == "assign_task":
-            cur.execute("delete from task_assignees where task_id = %s", (row_id,))
-            for owner in before.get("assignees", []):
-                cur.execute(
-                    "insert into task_assignees (task_id, name, employee_id) values (%s, %s, %s)",
-                    (row_id, owner["name"], owner["employee_id"]),
-                )
-            summary = "Put the task's owner back."
-        elif action == "complete_task":
-            cur.execute("update tasks set status = %s where id = %s", (before["status"], row_id))
-            summary = "The task is open again."
-        elif action == "drop_lead":
-            cur.execute(
-                "update leads set status = %s, status_changed_at = now() where id = %s",
-                (before["status"], row_id),
-            )
-            summary = "The lead is back to open."
-        else:
+    for change_id in change_ids:
+        outcome = history.undo(conn, change_id, actor_id=actor_id, may_undo_others=True)
+        if outcome != "done":
             conn.rollback()
-            return CommandOutcome(status="not_found", action="undo", summary="Nothing to undo.")
+            return CommandOutcome(status="not_found", action="undo",
+                                  summary=history.UNDO_WORDS[outcome])
     conn.commit()
-    return CommandOutcome(status="applied", action="undo", row_id=row_id, summary=summary)
+    return CommandOutcome(status="applied", action="undo",
+                          summary=_UNDONE.get(action, history.UNDO_WORDS["done"]))

@@ -1,0 +1,26 @@
+{# Who changed what on this record, newest first, each with its own Undo.
+   Shared by the lead and contact pages. An employee sees an Undo only on
+   their own changes; the server enforces the same rule regardless. #}
+{% if changes %}
+<h2>Changes</h2>
+<div class="card">
+  <ul class="changes">
+  {% for c in changes %}
+    <li{% if c.is_undone %} class="undone"{% endif %}>
+      <span>{{ c.changed_by_name or 'Someone' }} {{ c.describe() }}</span>
+      <span class="meta">
+        {{ ago(c.changed_at) }}{% if c.via == 'whatsapp' %} · on WhatsApp{% endif %}
+        {% if c.is_undone %} · undone{% if c.undone_by_name %} by {{ c.undone_by_name }}{% endif %}{% endif %}
+      </span>
+      {% if not c.is_undone and actor and (actor.role != 'employee' or c.changed_by == actor.entity_id) %}
+        <form method="post" action="/history/undo" class="inline-form">
+          <input type="hidden" name="ids" value="{{ c.id }}">
+          <input type="hidden" name="back" value="{{ request.url.path }}">
+          <button type="submit" class="linkish">Undo</button>
+        </form>
+      {% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+</div>
+{% endif %}

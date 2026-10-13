@@ -20,3 +20,10 @@ def _actor(request: Request) -> dict:
 
 
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR), context_processors=[_actor])
+
+# The undo bar's wording comes from the same table the WhatsApp reply uses, so
+# the website and the phone never describe the same outcome differently.
+from app.history import UNDO_WORDS, ago  # noqa: E402
+
+templates.env.globals["undo_words"] = UNDO_WORDS
+templates.env.globals["ago"] = ago

@@ -17,7 +17,8 @@ from app.web.auth import COOKIE_NAME, load_actor
 from app.web.policy import is_public, role_allows
 from app.web.templating import templates
 from app.web.routes import (
-    admin, ask, captures, contacts, entities, ingest, leads, login, meetings, review, tasks, whatsapp,
+    admin, ask, captures, contacts, entities, history, ingest, leads, login, meetings, review, tasks,
+    whatsapp,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -41,6 +42,7 @@ app.include_router(captures.router)
 app.include_router(whatsapp.router)
 app.include_router(login.router)
 app.include_router(admin.router)
+app.include_router(history.router)
 
 
 @app.middleware("http")
