@@ -19,6 +19,7 @@ three changes land together or not at all.
 import json
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Any, Optional
 
 import psycopg
@@ -26,12 +27,13 @@ import psycopg
 # Contact fields a person may correct by hand. The same list decides what the
 # edit form offers and what this module will write, so neither can drift.
 CONTACT_FIELDS = ("canonical_name", "phone", "email", "title", "region")
-LEAD_FIELDS = ("status", "next_follow_up_due", "notes")
+LEAD_FIELDS = ("status", "next_follow_up_due", "notes", "order_value", "drop_reason")
 
 FIELD_LABELS = {
     "canonical_name": "name", "phone": "phone", "email": "email", "title": "title",
     "region": "region", "status": "status", "next_follow_up_due": "follow-up date",
-    "notes": "notes", "owners": "owner",
+    "notes": "notes", "owners": "owner", "order_value": "order value",
+    "drop_reason": "reason for dropping",
 }
 
 _MISSING = object()
@@ -69,6 +71,10 @@ def _plain(value):
     jsonb compares equal to the one that went in."""
     if isinstance(value, (date, datetime)):
         return value.isoformat()
+    if isinstance(value, Decimal):
+        # numeric comes back as Decimal('50000.00'); stored and compared as
+        # plain text so "50000" typed in a form is the same amount.
+        return format(value.normalize(), "f")
     if isinstance(value, str):
         value = value.strip()
         return value or None

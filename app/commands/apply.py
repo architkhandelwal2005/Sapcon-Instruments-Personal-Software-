@@ -48,6 +48,8 @@ def apply_command(conn: psycopg.Connection, command: ParsedCommand,
         return _assign_task(conn, command, actor_id)
     if command.action == "complete_task":
         return _complete_task(conn, command, actor_id)
+    if command.action == "add_lead":
+        return add_lead(conn, command, actor_id)
     return _drop_lead(conn, command, actor_id)
 
 
@@ -294,6 +296,85 @@ def drop_lead(conn: psycopg.Connection, lead_id: str, name: str,
         summary=f"Lead \"{name}\" is dropped - it keeps its history and can be reopened.",
         undo_token=_token("drop_lead", change_id),
     )
+
+
+def _find_customers(conn: psycopg.Connection, target: str) -> tuple:
+    """Companies and people, never our own staff, by the words he used."""
+    words = _words(target)
+    if not words:
+        return [], False
+    any_clause = " or ".join(
+        f"(e.canonical_name ilike %(w{i})s or array_to_string(e.aliases, ' ') ilike %(w{i})s)"
+        for i in range(len(words)))
+    params = {f"w{i}": f"%{w}%" for i, w in enumerate(words)}
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            select e.id, e.canonical_name, e.canonical_name || ' ' || array_to_string(e.aliases, ' ')
+            from entities e
+            where e.entity_type in ('company', 'person') and e.review_status <> 'rejected'
+              and e.merged_into is null and ({any_clause})
+            limit 25
+            """,
+            params,
+        )
+        rows = [(str(i), n, h) for i, n, h in cur.fetchall()]
+    return _best_matches(rows, words), _is_weak(rows, words)
+
+
+def add_lead(conn: psycopg.Connection, command: ParsedCommand,
+             actor_id: Optional[str] = None) -> CommandOutcome:
+    """"Make Parag Dairy a lead for Vishal." A lead is made only when he says
+    so - a company mentioned in a note is not a lead until someone decides it
+    is worth chasing. A name that matches nothing becomes a new company, marked
+    for review; one that matches several is asked about, never guessed."""
+    owner = None
+    if (command.person or "").strip():
+        owner = find_employee_by_spoken_name(conn, command.person)
+        if owner is None:
+            return CommandOutcome(status="no_person", action="add_lead",
+                                  summary=f"I could not find \"{command.person}\" on the team. Nothing was added.")
+
+    found, weak = _find_customers(conn, command.target)
+    if weak:
+        # Only part of the name matched anything - "Brandnew Agro" against
+        # every company with "Agro" in it. That is a new name, not a choice
+        # between old ones. It is created for review, where a real duplicate
+        # is caught and merged.
+        found = []
+    if len(found) > 1:
+        names = ", ".join(label for _, label in found[:5])
+        return CommandOutcome(status="not_found", action="add_lead",
+                              summary=f"More than one contact could be \"{command.target}\": {names}. "
+                                      "Say the full name and I will add it.")
+    with conn.cursor() as cur:
+        if found:
+            entity_id, name = found[0]
+            cur.execute("select l.id, ae.canonical_name from leads l "
+                        "left join entities ae on ae.id = l.assigned_to "
+                        "where l.entity_id = %s and l.status = 'open'", (entity_id,))
+            open_lead = cur.fetchone()
+            if open_lead:
+                who = f", with {open_lead[1]}" if open_lead[1] else ", not given to anyone yet"
+                return CommandOutcome(status="already", action="add_lead", row_id=str(open_lead[0]),
+                                      url_path=f"/leads/{open_lead[0]}",
+                                      summary=f"{name} is already an open lead{who}.")
+        else:
+            name = " ".join(w.capitalize() if w.islower() else w for w in command.target.split())
+            cur.execute(
+                "insert into entities (canonical_name, entity_type, source, review_status) "
+                "values (%s, 'company', 'whatsapp', 'pending') returning id", (name,))
+            entity_id = str(cur.fetchone()[0])
+        cur.execute(
+            "insert into leads (entity_id, assigned_to, source) values (%s, %s, 'whatsapp') returning id",
+            (entity_id, owner[0] if owner else None))
+        lead_id = str(cur.fetchone()[0])
+    conn.commit()
+    for_whom = f" for {owner[1]} - they have been told" if owner else " - not given to anyone yet"
+    new = "" if found else " (new contact, added for review)"
+    return CommandOutcome(status="applied", action="add_lead", row_id=lead_id,
+                          url_path=f"/leads/{lead_id}",
+                          summary=f"Added {name}{new} as a lead{for_whom}.")
 
 
 def _exists(conn: psycopg.Connection, table: str, row_id: str) -> bool:

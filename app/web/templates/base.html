@@ -22,7 +22,7 @@
       <a href="/leads">Leads</a>
       {% if role != 'employee' %}<a href="/ask">Ask</a>{% endif %}
       {% if role != 'employee' %}<a href="/review">Review</a>{% endif %}
-      <a href="/meetings/new">New meeting</a>
+      <a href="/meetings/new">Record a visit</a>
       {% if role == 'owner' %}<a href="/admin/users">People</a>{% endif %}
       <a href="/notifications" class="bell" aria-label="Notifications{% if unread %}, {{ unread }} unread{% endif %}">&#128276;{% if unread %}<span class="bell-count">{{ unread if unread < 100 else '99+' }}</span>{% endif %}</a>
       <span class="site-user">

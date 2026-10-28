@@ -3,6 +3,8 @@
 {% block content %}
 
 <h1>Team</h1>
+{% if moved %}<div class="flash"><span>Moved {{ moved[0] }} open task(s) and {{ moved[1] }} open lead(s). The new owner has been notified.</span></div>
+{% elif moved_refused %}<div class="flash flash-warn"><span>Pick two different people.</span></div>{% endif %}
 <p class="meta">Who has what open. Late work and quiet leads first. Click a number to see the list.</p>
 
 {% macro cell(n, href, warn=false) -%}
@@ -40,6 +42,23 @@
       </tr>
     </tbody>
   </table>
+</div>
+
+<h2>Hand over someone's work</h2>
+<div class="card">
+  <p class="meta">For leave, or someone leaving. Moves all their <strong>open</strong> tasks and leads; finished work keeps their name.</p>
+  <form method="post" action="/team/handover" class="filter-form"
+        onsubmit="return confirm('Move all open tasks and leads from ' + this.from_id.selectedOptions[0].text + ' to ' + this.to_id.selectedOptions[0].text + '?');">
+    <select name="from_id" required>
+      <option value="">From&hellip;</option>
+      {% for r in everyone %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}
+    </select>
+    <select name="to_id" required>
+      <option value="">To&hellip;</option>
+      {% for r in everyone %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}
+    </select>
+    <button type="submit">Move work</button>
+  </form>
 </div>
 
 {% endblock %}

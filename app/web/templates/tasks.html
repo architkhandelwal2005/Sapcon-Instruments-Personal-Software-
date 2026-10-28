@@ -51,7 +51,7 @@
             <td>{% if t.related_entity_id %}<a class="entity-link" href="/entities/{{ t.related_entity_id }}">{{ t.related_entity_name }}</a>{% else %}&mdash;{% endif %}</td>
             <td>
               {% for a in t.assignees %}
-                <div>{{ a.name }}{% if not a.employee_id %} <span class="badge badge-pending">not on roster</span>{% endif %}</div>
+                <div>{{ a.name }}{% if not a.employee_id %} <span class="badge badge-pending">not on roster</span>{% elif employees %} <span class="meta" title="{{ 'Opened ' ~ ago(a.seen_at) if a.seen_at else 'Not opened yet' }}">{{ '&#10003; seen'|safe if a.seen_at else 'unseen' }}</span>{% endif %}</div>
               {% else %}unassigned{% endfor %}
               {# Staff can hand a task to someone here; an employee sees only
                  their own tasks and cannot pass work to anybody else. #}
@@ -68,7 +68,7 @@
                 </form>
               {% endif %}
             </td>
-            <td>{{ t.due_date or "" }} {% if t.overdue %}<span class="badge badge-overdue">overdue</span>{% endif %}</td>
+            <td>{{ t.due_date or "" }}{% if t.due_assumed %} <span class="meta" title="No date was said, so the system picked one">(assumed)</span>{% endif %} {% if t.overdue %}<span class="badge badge-overdue">overdue</span>{% endif %}</td>
             <td><span class="badge {% if t.status == 'done' %}badge-direct{% else %}badge-tag{% endif %}">{{ t.status }}</span></td>
             <td>
               <form method="post" action="/tasks/{{ t.id }}/status">

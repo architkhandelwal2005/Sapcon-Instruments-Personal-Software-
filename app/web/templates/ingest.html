@@ -6,7 +6,7 @@
 
 {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
 
-<p class="meta">Upload the voice note or type the recap. It goes through extraction and verification, then lands in the review queue for the office boy to clear.</p>
+<p class="meta">Record a voice note about the visit or call, upload one, or type it. People, companies, tasks and dates are picked out for you; anything the system is unsure of is marked for checking.</p>
 
 <form class="ingest-form" method="post" action="/meetings/new" enctype="multipart/form-data">
   <label>Meeting date
@@ -18,8 +18,12 @@
   <label>Location <span class="meta">(optional)</span>
     <input type="text" name="location" placeholder="e.g. Pune">
   </label>
+  <div class="recorder" id="recorder" hidden>
+    <button type="button" id="rec-btn" class="btn-confirm">&#9679; Record</button>
+    <span id="rec-status" class="meta" aria-live="polite"></span>
+  </div>
   <label>Recording <span class="meta">(optional if you type the recap)</span>
-    <input type="file" name="audio" accept="audio/*">
+    <input type="file" name="audio" id="audio-input" accept="audio/*">
   </label>
   <label>Typed recap <span class="meta">(optional if you upload audio)</span>
     <textarea name="text" placeholder="What happened in the meeting..."></textarea>
@@ -28,5 +32,43 @@
 </form>
 
 <p class="meta">Transcription of a long recording can take a minute.</p>
+
+<script>
+// Record straight from the phone's microphone. The recording is put into the
+// file box above, so it is sent exactly as an uploaded file would be.
+(function () {
+  if (!window.MediaRecorder || !navigator.mediaDevices || !window.DataTransfer) return;
+  var box = document.getElementById("recorder"), btn = document.getElementById("rec-btn"),
+      status = document.getElementById("rec-status"), input = document.getElementById("audio-input");
+  box.hidden = false;
+  var rec = null, chunks = [], started = 0, timer = null;
+  function tick() {
+    var s = Math.floor((Date.now() - started) / 1000);
+    status.textContent = "Recording " + Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  }
+  btn.addEventListener("click", function () {
+    if (rec && rec.state === "recording") { rec.stop(); return; }
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      chunks = [];
+      rec = new MediaRecorder(stream);
+      rec.ondataavailable = function (e) { if (e.data.size) chunks.push(e.data); };
+      rec.onstop = function () {
+        clearInterval(timer);
+        stream.getTracks().forEach(function (t) { t.stop(); });
+        var type = rec.mimeType || "audio/webm";
+        var ext = type.indexOf("mp4") >= 0 ? "m4a" : type.indexOf("ogg") >= 0 ? "ogg" : "webm";
+        var file = new File(chunks, "recording." + ext, { type: type });
+        var dt = new DataTransfer(); dt.items.add(file); input.files = dt.files;
+        btn.innerHTML = "&#9679; Record again";
+        status.textContent = "Recorded " + Math.round(file.size / 1024) + " KB - press Process meeting to send it.";
+      };
+      rec.start(); started = Date.now(); tick(); timer = setInterval(tick, 1000);
+      btn.textContent = "■ Stop";
+    }).catch(function () {
+      status.textContent = "Microphone not allowed - you can still upload a recording or type.";
+    });
+  });
+})();
+</script>
 
 {% endblock %}

@@ -2,6 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# ffmpeg converts recordings made in the browser (webm, mp4) into a format the
+# transcriber accepts. WhatsApp's own voice notes are already ogg and skip it.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg     && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml uv.lock ./

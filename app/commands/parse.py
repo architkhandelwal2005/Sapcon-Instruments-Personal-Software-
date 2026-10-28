@@ -12,7 +12,7 @@ from typing import Literal, Optional
 
 from app.llm import complete_json
 
-Action = Literal["assign_task", "complete_task", "drop_lead"]
+Action = Literal["assign_task", "complete_task", "drop_lead", "add_lead"]
 
 # Most messages are notes, and asking a model "is this an instruction?" about
 # every one of them would spend a large share of the free tier's daily calls on

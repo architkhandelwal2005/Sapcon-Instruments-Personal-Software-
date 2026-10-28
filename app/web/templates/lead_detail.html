@@ -15,6 +15,8 @@
   <div>Assigned to: {{ lead.assigned_name or "unassigned" }}</div>
   <div>Source: {{ lead.source or "-" }}</div>
   {% if lead.next_follow_up_due %}<div>Next follow-up: {{ lead.next_follow_up_due }}</div>{% endif %}
+  {% if lead.order_value %}<div>Order value: &#8377;{{ "{:,.0f}".format(lead.order_value) }}</div>{% endif %}
+  {% if lead.drop_reason %}<div>Why dropped: {{ lead.drop_reason }}</div>{% endif %}
   {% if lead.status_changed_at %}<div>Last status change: {{ lead.status_changed_at.date() }}{% if lead.status_changed_by_name %} by {{ lead.status_changed_by_name }}{% endif %}</div>{% endif %}
 </div>
 
@@ -26,6 +28,12 @@
     </label>
     <label>Notes
       <textarea name="notes">{{ lead.notes or '' }}</textarea>
+    </label>
+    <label>Order value, if won <span class="meta">(&#8377; - e.g. 150000 or 1.5 lakh)</span>
+      <input type="text" name="order_value" inputmode="decimal" value="{{ '%.0f'|format(lead.order_value) if lead.order_value is not none else '' }}">
+    </label>
+    <label>Reason, if dropped <span class="meta">(price, competitor, no requirement...)</span>
+      <input type="text" name="drop_reason" value="{{ lead.drop_reason or '' }}">
     </label>
     <div class="review-actions">
       <button name="status" value="{{ lead.status }}">Save</button>

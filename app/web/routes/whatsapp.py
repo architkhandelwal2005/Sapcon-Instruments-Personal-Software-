@@ -40,6 +40,7 @@ from app.transcription.vocabulary import known_names
 from app.phone import DEFAULT_CC, normalize_phone
 from app.query import ask as run_ask
 from app.review import confirm_meeting, finalise_meeting_status, pending_for_meeting
+from app.whatsapp import digest
 from app.whatsapp.client import download_media, send_buttons, send_whatsapp, valid_signature
 from app.whatsapp.delivery import record_sent, record_status, statuses
 from app.commands import ParsedCommand
@@ -144,9 +145,20 @@ def _lookup_sender(conn, wa_id: str) -> Optional[str]:
     return str(row[0]) if row else None
 
 
-def _say(conn, to: str, body: str) -> Optional[str]:
+def _say(conn, to: str, body: str, *, nudge: bool = True) -> Optional[str]:
     """Send a reply and remember that we did, so a message Meta later drops is
-    visible instead of silently missing. Returns the outbound message id."""
+    visible instead of silently missing. Returns the outbound message id.
+
+    Every reply carries a one-line count of unread team updates, if there are
+    any: the only way news reaches him without a template, see digest.py."""
+    if nudge:
+        try:
+            # A savepoint: a failed count must not abort work the caller has
+            # not committed yet, and must never cost the reply.
+            with conn.transaction():
+                body += digest.nudge(conn, _lookup_sender(conn, to))
+        except Exception:
+            pass
     wa_message_id = send_whatsapp(to, body)
     record_sent(conn, wa_message_id, to)
     remember_turn(conn, to, "us", body)
@@ -340,6 +352,11 @@ def _route_words(conn, from_, text: str, logged_by, base, *, audio_path, reply_t
         return
     if _handle_reply_to_pending(conn, from_, text, base, reply_to, logged_by):
         return
+    if logged_by and digest.wants_updates(text):
+        reply = digest.updates_reply(conn, logged_by, base)
+        _say(conn, from_, reply, nudge=False)
+        conn.commit()
+        return
 
     plan = plan_message(text, render(recent(conn, from_)))
     _carry_out(conn, from_, plan, text, logged_by, base, audio_path=audio_path)
@@ -428,7 +445,7 @@ def _carry_out(conn, from_, plan: Plan, text: str, logged_by, base, *, audio_pat
         _handle_undo(conn, from_, base, logged_by)
         return
 
-    if plan.action in ("assign_task", "complete_task", "drop_lead"):
+    if plan.action in ("assign_task", "complete_task", "drop_lead", "add_lead"):
         command = ParsedCommand(action=plan.action, target=plan.target,
                                 person=plan.person or None)
         outcome = apply_command(conn, command, actor_id=logged_by)

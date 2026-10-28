@@ -714,3 +714,4 @@ ul.notices li .meta { white-space: nowrap; }
 }
 /* A wide table scrolls inside its card, so the page itself never goes sideways on a phone. */
 .card { overflow-x: auto; }
+.recorder { display: flex; align-items: center; gap: 0.75rem; margin: 0.25rem 0 0.5rem; }

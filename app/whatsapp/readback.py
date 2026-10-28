@@ -105,6 +105,9 @@ def _is_staff(r: ResolutionResult) -> bool:
 def _task_line(t: TaskRow) -> str:
     owners = ", ".join(a["name"] for a in t.assignees) if t.assignees else "no owner"
     due = t.due_date.strftime("%d %b") if isinstance(t.due_date, date) else "no due date"
+    if t.due_assumed:
+        # He said no date; the system picked one. Saying so invites a correction.
+        due += " (assumed)"
     return f"[ ] {t.description} -- {owners} -- {due}"
 
 

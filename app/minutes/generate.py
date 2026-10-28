@@ -32,6 +32,7 @@ class TaskRow:
     source_quote: Optional[str]
     task_id: str
     assignees: list[dict]             # {name, employee_id} - employee_id None when unmatched
+    due_assumed: bool = False         # filled in because no date was said
 
 
 @dataclass
@@ -68,7 +69,7 @@ def fetch_task_assignees(conn: psycopg.Connection, task_ids: list[str]) -> dict[
     with conn.cursor() as cur:
         cur.execute(
             """
-            select ta.task_id, coalesce(e.canonical_name, ta.name), ta.employee_id
+            select ta.task_id, coalesce(e.canonical_name, ta.name), ta.employee_id, ta.seen_at
             from task_assignees ta
             left join entities e on e.id = ta.employee_id
             where ta.task_id = any(%s::uuid[])
@@ -77,8 +78,9 @@ def fetch_task_assignees(conn: psycopg.Connection, task_ids: list[str]) -> dict[
             (task_ids,),
         )
         out: dict[str, list[dict]] = {}
-        for tid, name, eid in cur.fetchall():
-            out.setdefault(str(tid), []).append({"name": name, "employee_id": (str(eid) if eid else None)})
+        for tid, name, eid, seen in cur.fetchall():
+            out.setdefault(str(tid), []).append(
+                {"name": name, "employee_id": (str(eid) if eid else None), "seen_at": seen})
     return out
 
 
@@ -141,7 +143,7 @@ def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> Mee
         cur.execute(
             """
             select t.description, e.canonical_name, e.id, t.due_date, t.status,
-                   t.confidence, t.review_status, t.source_quote, t.id
+                   t.confidence, t.review_status, t.source_quote, t.id, t.due_assumed
             from tasks t
             left join entities e on e.id = t.related_entity_id
             where t.meeting_id = %s and t.review_status <> 'rejected'
@@ -153,8 +155,9 @@ def fetch_meeting_minutes_data(conn: psycopg.Connection, meeting_id: str) -> Mee
 
     owners = fetch_task_assignees(conn, [str(r[8]) for r in task_rows])
     tasks = [
-        TaskRow(desc, name, (str(eid) if eid else None), due, status, conf, rs, sq, str(tid), owners.get(str(tid), []))
-        for desc, name, eid, due, status, conf, rs, sq, tid in task_rows
+        TaskRow(desc, name, (str(eid) if eid else None), due, status, conf, rs, sq, str(tid),
+                owners.get(str(tid), []), bool(assumed))
+        for desc, name, eid, due, status, conf, rs, sq, tid, assumed in task_rows
     ]
 
     return MeetingMinutesData(

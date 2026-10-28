@@ -95,6 +95,9 @@ def _pending(conn: psycopg.Connection) -> dict[str, dict]:
             join entities e on e.id = n.recipient_id
             join app_users u on u.entity_id = n.recipient_id and not u.disabled
             where n.emailed_at is null and n.read_at is null
+              -- People who use the CRM on WhatsApp hear from it there; see
+              -- app/whatsapp/digest.py. Everyone else hears by email.
+              and not exists (select 1 from whatsapp_senders ws where ws.entity_id = n.recipient_id)
               and n.created_at < now() - interval '{WAIT_MINUTES} minutes'
               and n.created_at > now() - interval '{GIVE_UP_DAYS} days'
               and coalesce(e.email, '') like '%%@%%'
@@ -138,6 +141,8 @@ def flush(conn: psycopg.Connection, base_url: str, sender=send) -> int:
 
 
 def _loop(base_url: str) -> None:
+    from app import daily
+
     while True:
         time.sleep(EVERY_SECONDS)
         try:
@@ -146,7 +151,9 @@ def _loop(base_url: str) -> None:
             print(f"mailer: no database connection: {exc}", file=sys.stderr)
             continue
         try:
-            flush(conn, base_url)
+            daily.run_due(conn, base_url)
+            if configured():
+                flush(conn, base_url)
         except Exception as exc:
             print(f"mailer: {type(exc).__name__}: {exc}", file=sys.stderr)
             try:
@@ -157,12 +164,18 @@ def _loop(base_url: str) -> None:
             release_connection(conn)
 
 
+def configured() -> bool:
+    return bool(os.environ.get("BREVO_API_KEY") and os.environ.get("MAIL_FROM"))
+
+
 def start() -> bool:
-    """Start the background sender, if email is configured."""
-    if not (os.environ.get("BREVO_API_KEY") and os.environ.get("MAIL_FROM")
-            and os.environ.get("PUBLIC_BASE_URL")):
-        print("mailer: BREVO_API_KEY / MAIL_FROM / PUBLIC_BASE_URL not set - notifications stay on the site only")
+    """Start the background loop. It always runs - the daily overdue check
+    needs no email - but sends mail only once email is configured."""
+    base = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+    if not base:
+        print("mailer: PUBLIC_BASE_URL not set - background jobs not started")
         return False
-    base_url = os.environ["PUBLIC_BASE_URL"].rstrip("/")
-    threading.Thread(target=_loop, args=(base_url,), name="mailer", daemon=True).start()
+    if not configured():
+        print("mailer: BREVO_API_KEY / MAIL_FROM not set - notifications stay on the site only")
+    threading.Thread(target=_loop, args=(base,), name="mailer", daemon=True).start()
     return True

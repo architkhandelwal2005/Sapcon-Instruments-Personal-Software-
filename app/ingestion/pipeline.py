@@ -16,7 +16,8 @@ import psycopg
 from app.entity_resolution.employees import employee_roster, match_employee
 from app.entity_resolution.resolve import ResolutionResult, resolve_entity
 from app.extraction.extractor import extract
-from app.extraction.resolve_dates import resolve_due_date
+from app import updates
+from app.extraction.resolve_dates import assumed_due_date, resolve_due_date
 from app.ingestion.failures import record_failure
 from app.review import finalise_meeting_status
 
@@ -152,6 +153,49 @@ def _write_attendees(conn, meeting_id, names: list[str]) -> None:
                 seen_ids.add(emp)
 
 
+# How alike two task descriptions must be, by trigram similarity, to be the
+# same piece of work. Only ever compared between tasks for the same customer
+# and the same person, so a loose-ish bar is safe: "send Parag the revised
+# quote" and "send revised quotation to Parag" are one job.
+SAME_TASK_SIMILARITY = 0.5
+
+
+def _same_open_task(conn, description: str, related_id, employee_ids: list) -> Optional[str]:
+    """An open task already on someone's list that this one repeats. Needs a
+    named owner in common and the same customer - a repeat is "the same person
+    asked to do the same thing again", and without both that is a guess."""
+    if not employee_ids:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select t.id from tasks t
+            where t.status <> 'done' and t.review_status <> 'rejected'
+              and t.related_entity_id is not distinct from %(rel)s
+              and exists (select 1 from task_assignees ta
+                          where ta.task_id = t.id and ta.employee_id = any(%(emps)s::uuid[]))
+              and similarity(lower(t.description), lower(%(d)s)) >= %(bar)s
+            order by similarity(lower(t.description), lower(%(d)s)) desc
+            limit 1
+            """,
+            {"rel": related_id, "emps": employee_ids, "d": description, "bar": SAME_TASK_SIMILARITY},
+        )
+        row = cur.fetchone()
+    return str(row[0]) if row else None
+
+
+def _note_repeat(conn, task_id: str, description: str, meeting_id, meeting_date) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "select m.logged_by, e.canonical_name from meetings m "
+            "left join entities e on e.id = m.logged_by where m.id = %s", (meeting_id,))
+        row = cur.fetchone()
+    by, name = (str(row[0]), row[1]) if row and row[0] else (None, "Voice note")
+    updates.post(conn, "task", task_id,
+                 f"Mentioned again in the note of {meeting_date:%d %b}: {description}",
+                 author_id=by, author_name=name or "Voice note")
+
+
 def _write_meeting_body(conn, result, resolved, on_resolved, meeting_id, meeting_date, transcript) -> tuple[int, int, int, int, int]:
     conn_count = auto = pending = 0
     seen: set = set()
@@ -191,18 +235,30 @@ def _write_meeting_body(conn, result, resolved, on_resolved, meeting_id, meeting
     with conn.cursor() as cur:
         for t in result.tasks:
             rel_id = _resolve_ref(conn, resolved, t.target_entity, transcript, on_resolved) if t.target_entity else None
+            owners = [(name, match_employee(conn, name))
+                      for name in dict.fromkeys(n.strip() for n in t.assignees if n.strip())]
+            existing = _same_open_task(conn, t.description, rel_id, [e for _, e in owners if e])
+            if existing:
+                # Said again, not new work. A second copy would split the
+                # updates and the "done" between two rows; a note on the first
+                # keeps one task and still tells its owner it came up again.
+                _note_repeat(conn, existing, t.description, meeting_id, meeting_date)
+                continue
             due = resolve_due_date(meeting_date, t.relative_due)
+            due_assumed = due is None
+            if due_assumed:
+                due = assumed_due_date(meeting_date)
             status = _row_status(t.confidence)
             cur.execute(
-                "insert into tasks (description, related_entity_id, meeting_id, due_date, "
-                "confidence, source_quote, review_status) values (%s,%s,%s,%s,%s,%s,%s) returning id",
-                (t.description, rel_id, meeting_id, due, t.confidence, t.source_quote, status),
+                "insert into tasks (description, related_entity_id, meeting_id, due_date, due_assumed, "
+                "confidence, source_quote, review_status) values (%s,%s,%s,%s,%s,%s,%s,%s) returning id",
+                (t.description, rel_id, meeting_id, due, due_assumed, t.confidence, t.source_quote, status),
             )
             (task_id,) = cur.fetchone()
-            for name in dict.fromkeys(n.strip() for n in t.assignees if n.strip()):
+            for name, employee_id in owners:
                 cur.execute(
                     "insert into task_assignees (task_id, name, employee_id) values (%s,%s,%s)",
-                    (task_id, name, match_employee(conn, name)),
+                    (task_id, name, employee_id),
                 )
             task_count += 1
             auto, pending = (auto + 1, pending) if status == "auto_confirmed" else (auto, pending + 1)

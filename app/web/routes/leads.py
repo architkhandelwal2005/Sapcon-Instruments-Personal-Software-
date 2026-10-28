@@ -9,6 +9,7 @@ lead's entity, reusing fetch_interaction_history() as-is.
 """
 
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 from fastapi import APIRouter, Form, HTTPException, Request
@@ -212,7 +213,8 @@ def lead_detail(request: Request, lead_id: str):
             cur.execute(
                 """
                 select l.entity_id, l.assigned_to, ae.canonical_name, l.status, l.source,
-                       l.next_follow_up_due, l.notes, l.created_at, l.status_changed_at, sce.canonical_name
+                       l.next_follow_up_due, l.notes, l.created_at, l.status_changed_at, sce.canonical_name,
+                       l.order_value, l.drop_reason
                 from leads l
                 left join entities ae on ae.id = l.assigned_to
                 left join entities sce on sce.id = l.status_changed_by
@@ -224,7 +226,8 @@ def lead_detail(request: Request, lead_id: str):
             if row is None:
                 raise ValueError(f"No lead {lead_id!r}")
             (entity_id, assigned_to, assigned_name, status, source,
-             next_follow_up_due, notes, created_at, status_changed_at, status_changed_by_name) = row
+             next_follow_up_due, notes, created_at, status_changed_at, status_changed_by_name,
+             order_value, drop_reason) = row
 
         entity = fetch_entity(conn, str(entity_id))
         meetings = fetch_interaction_history(conn, str(entity_id), actor=actor)
@@ -241,6 +244,7 @@ def lead_detail(request: Request, lead_id: str):
         "assigned_name": assigned_name, "status": status, "source": source,
         "next_follow_up_due": next_follow_up_due, "notes": notes, "created_at": created_at,
         "status_changed_at": status_changed_at, "status_changed_by_name": status_changed_by_name,
+        "order_value": order_value, "drop_reason": drop_reason,
     }
     return templates.TemplateResponse(
         request,
@@ -250,6 +254,26 @@ def lead_detail(request: Request, lead_id: str):
     )
 
 
+def _amount(raw: str) -> tuple[Optional[Decimal], bool]:
+    """'1,50,000', 'Rs 150000' and '₹1.5 lakh' are what people type. Returns
+    (amount, readable); an unreadable amount leaves the stored one alone, the
+    same rule as an unreadable date."""
+    text = (raw or "").lower().replace(",", "").replace("₹", "").replace("rs.", "").replace("rs", "").strip()
+    if not text:
+        return None, True
+    scale = Decimal(1)
+    for word, mult in (("crore", 10_000_000), ("cr", 10_000_000), ("lakh", 100_000),
+                       ("lac", 100_000), ("l", 100_000), ("k", 1_000)):
+        if text.endswith(word):
+            text, scale = text[: -len(word)].strip(), Decimal(mult)
+            break
+    try:
+        amount = Decimal(text) * scale
+    except InvalidOperation:
+        return None, False
+    return (amount, True) if amount >= 0 else (None, False)
+
+
 @router.post("/leads/{lead_id}/status")
 def update_lead_status(
     request: Request,
@@ -257,6 +281,8 @@ def update_lead_status(
     status: str = Form(...),
     next_follow_up_due: str = Form(default=""),
     notes: str = Form(default=""),
+    order_value: str = Form(default=""),
+    drop_reason: str = Form(default=""),
 ):
     """Who made the change comes from the session. The form used to carry a
     "who's updating this" dropdown, from before there were logins - which let
@@ -272,6 +298,7 @@ def update_lead_status(
             due = datetime.strptime(next_follow_up_due.strip(), "%Y-%m-%d").date()
         except ValueError:
             due_readable = False
+    value, value_readable = _amount(order_value)
 
     actor = actor_of(request)
     conn = get_connection()
@@ -287,6 +314,9 @@ def update_lead_status(
             history.change(conn, "lead", lead_id, "next_follow_up_due", due, actor_id=who)
             if due_readable else None,
             history.change(conn, "lead", lead_id, "notes", notes, actor_id=who),
+            history.change(conn, "lead", lead_id, "order_value", value, actor_id=who)
+            if value_readable else None,
+            history.change(conn, "lead", lead_id, "drop_reason", drop_reason, actor_id=who),
         ]
         conn.commit()
     finally:

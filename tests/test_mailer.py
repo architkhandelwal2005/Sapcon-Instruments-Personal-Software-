@@ -70,3 +70,34 @@ def test_a_bad_key_is_retried_not_dropped(monkeypatch):
 def test_a_malformed_address_is_given_up(monkeypatch):
     err = urllib.error.HTTPError("u", 400, "bad", {}, None)
     assert _run(monkeypatch, err) == (0, [[1, 2]])
+
+
+# --- the morning email -------------------------------------------------------
+
+from datetime import datetime, timezone
+
+from app import daily
+
+
+def test_nothing_to_say_sends_nothing():
+    assert daily.morning_email("Vishal Dixit", [], [], [], "https://x") is None
+
+
+def test_morning_email_puts_late_work_first():
+    d = daily.morning_email("Vishal Dixit", [("call Parag", "/tasks/1")],
+                            [("send quote (2 days late)", "/tasks/2")], [], "https://x")
+    assert d.subject == "Your work today: 1 late, 1 due today"
+    assert d.text.index("LATE") < d.text.index("DUE TODAY")
+    assert "Good morning Vishal," in d.text
+
+
+def test_a_long_list_is_cut_with_a_count():
+    quiet = [(f"Lead {i}", f"/leads/{i}") for i in range(30)]
+    d = daily.morning_email("A", [], [], quiet, "https://x")
+    assert "+18 more" in d.text
+
+
+def test_morning_jobs_wait_for_nine_ist():
+    # 03:00 UTC is 08:30 IST - too early; 03:30 UTC is 09:00 IST.
+    assert daily._today_ist(datetime(2026, 11, 2, 3, 0, tzinfo=timezone.utc))[1] == 8
+    assert daily._today_ist(datetime(2026, 11, 2, 3, 30, tzinfo=timezone.utc))[1] == 9

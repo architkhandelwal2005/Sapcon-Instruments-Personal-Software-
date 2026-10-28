@@ -11,8 +11,13 @@
     {% if task.overdue %}<span class="badge badge-overdue">overdue</span>{% endif %}
     {% if task.review_status == "pending" %}<span class="badge badge-pending">unconfirmed</span>{% endif %}
   </div>
-  <div>For: {% for a in task.assignees %}{{ a.name }}{% if not loop.last %}, {% endif %}{% else %}nobody yet{% endfor %}</div>
-  {% if task.due_date %}<div>Due: {{ task.due_date.strftime('%d %b %Y') }}</div>{% endif %}
+  <div>For:
+    {% for a in task.assignees %}{{ a.name }}
+      {%- if a.employee_id %} <span class="meta">({% if a.seen_at %}seen {{ ago(a.seen_at) }}{% else %}not opened yet{% endif %})</span>{% endif %}
+      {%- if not loop.last %}, {% endif %}
+    {% else %}nobody yet{% endfor %}
+  </div>
+  {% if task.due_date %}<div>Due: {{ task.due_date.strftime('%d %b %Y') }}{% if task.due_assumed %} <span class="badge badge-pending" title="No date was said, so the system picked one">assumed</span>{% endif %}</div>{% endif %}
   {% if task.related_entity_id %}<div>About: <a class="entity-link" href="/entities/{{ task.related_entity_id }}">{{ task.related_entity_name }}</a></div>{% endif %}
   {% if task.meeting_id %}<div>From: <a class="entity-link" href="/meetings/{{ task.meeting_id }}">note of {{ task.meeting_date.strftime('%d %b') if task.meeting_date else 'meeting' }}</a></div>{% endif %}
 </div>

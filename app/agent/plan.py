@@ -32,13 +32,14 @@ Action = Literal[
     "assign_task",
     "complete_task",
     "drop_lead",
+    "add_lead",
     "undo",
     "amend",        # fixing what was just recorded, rather than adding to it
     "chat",         # small talk, help, a clarifying question - reply and stop
 ]
 
 _ACTIONS = {"log", "ask", "correct_name", "amend", "assign_task", "complete_task",
-            "drop_lead", "undo", "chat"}
+            "drop_lead", "add_lead", "undo", "chat"}
 
 # A long message is never treated as chat, however conversational it reads. A
 # long message answered with a pleasantry is a visit thrown away; a long
@@ -162,14 +163,18 @@ Actions:
 - "assign_task": give an EXISTING task an owner. Needs "person".
 - "complete_task": mark an EXISTING task finished.
 - "drop_lead": stop pursuing a lead.
+- "add_lead": make a company or person a lead to chase, optionally for someone.
+  "make Parag Dairy a lead for Vishal", "add Konkan Agro as a new lead, give it to
+  Pooja", "Thermo Fisher ko lead bana do Saurabh ke liye". "target" is the company
+  or person, "person" who will chase it (empty if he names nobody).
 - "undo": reverse the change you just made.
 - "chat": greeting, thanks, agreement, a question about you or what you can do, or
   anything with nothing to record and nothing to look up. You write the reply.
 
 Return JSON:
 {"action": "<one of the above>",
- "target": "<for the three change actions: his words naming the task or lead>",
- "person": "<for assign_task: who it goes to>",
+ "target": "<for the change actions: his words naming the task, lead or company>",
+ "person": "<for assign_task and add_lead: who it goes to>",
  "question": "<for ask: the question, rewritten to stand alone if it was a follow-up>",
  "correct": "<for correct_name: the right spelling>",
  "wrong": ["<for correct_name: each wrong spelling he names>"],
@@ -190,8 +195,9 @@ For "chat" replies: sound like a capable assistant who knows this business, not 
 chatbot. Short - one or two lines, this is WhatsApp. No greetings back unless he
 greeted you. Never claim to have done something you have not done. If he asks what you
 can do, say: log visits from voice notes or text, answer questions about people,
-companies, pending work and past meetings, and carry out changes - assign a task to
-someone, mark one done, drop a lead."""
+companies, pending work and past meetings, carry out changes - assign a task to
+someone, mark one done, add or drop a lead - and send "updates" for what the team
+has done since he last asked."""
 
 
 def plan_message(text: str, conversation: str) -> Plan:

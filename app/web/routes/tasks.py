@@ -63,7 +63,7 @@ def tasks_page(
             cur.execute(
                 f"""
                 select t.id, t.description, t.related_entity_id, re.canonical_name,
-                       t.due_date, t.status, t.review_status, t.confidence, t.meeting_id
+                       t.due_date, t.status, t.review_status, t.confidence, t.meeting_id, t.due_assumed
                 from tasks t
                 left join entities re on re.id = t.related_entity_id
                 where {clause}
@@ -72,6 +72,13 @@ def tasks_page(
                 params,
             )
             found = cur.fetchall()
+        if actor.is_employee() and found:
+            # Their own list, on screen in front of them: that is seeing it.
+            with conn.cursor() as cur:
+                cur.execute("update task_assignees set seen_at = now() where employee_id = %s "
+                            "and seen_at is null and task_id = any(%s::uuid[])",
+                            (actor.entity_id, [str(r[0]) for r in found]))
+            conn.commit()
         owners = fetch_task_assignees(conn, [str(r[0]) for r in found])
         today = date.today()
         rows = [
@@ -82,8 +89,9 @@ def tasks_page(
                 "due_date": due, "status": tstatus, "review_status": review_status,
                 "confidence": confidence, "meeting_id": str(mid) if mid else None,
                 "overdue": bool(due and due < today and tstatus != "done"),
+                "due_assumed": due_assumed,
             }
-            for tid, desc, reid, rename, due, tstatus, review_status, confidence, mid in found
+            for tid, desc, reid, rename, due, tstatus, review_status, confidence, mid, due_assumed in found
         ]
         notes = updates.counts(conn, "task", [r["id"] for r in rows])
         for r in rows:
@@ -169,10 +177,14 @@ def task_detail(request: Request, task_id: str):
         if actor.is_employee() and not employee_owns_task(conn, actor, task_id):
             raise HTTPException(status_code=404, detail="No such task")
         with conn.cursor() as cur:
+            # The first time an owner opens it is when they have seen it.
+            cur.execute("update task_assignees set seen_at = now() "
+                        "where task_id = %s and employee_id = %s and seen_at is null",
+                        (task_id, actor.entity_id))
             cur.execute(
                 """
                 select t.description, t.related_entity_id, re.canonical_name, t.due_date,
-                       t.status, t.review_status, t.meeting_id, m.meeting_date
+                       t.status, t.review_status, t.meeting_id, m.meeting_date, t.due_assumed
                 from tasks t
                 left join entities re on re.id = t.related_entity_id
                 left join meetings m on m.id = t.meeting_id
@@ -183,12 +195,13 @@ def task_detail(request: Request, task_id: str):
             row = cur.fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="No such task")
-        desc, reid, rename, due, tstatus, review_status, mid, mdate = row
+        desc, reid, rename, due, tstatus, review_status, mid, mdate, due_assumed = row
         task = {
             "id": task_id, "description": desc,
             "related_entity_id": str(reid) if reid else None, "related_entity_name": rename,
             "due_date": due, "status": tstatus, "review_status": review_status,
             "meeting_id": str(mid) if mid else None, "meeting_date": mdate,
+            "due_assumed": due_assumed,
             "assignees": fetch_task_assignees(conn, [task_id]).get(task_id, []),
             "overdue": bool(due and due < date.today() and tstatus != "done"),
         }
