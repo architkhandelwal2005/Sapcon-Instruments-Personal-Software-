@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Team - Sapcon CRM{% endblock %}
+{% block content %}
+
+<h1>Team</h1>
+<p class="meta">Who has what open. Late work and quiet leads first. Click a number to see the list.</p>
+
+{% macro cell(n, href, warn=false) -%}
+  {%- if n -%}<a class="entity-link{% if warn %} warn{% endif %}" href="{{ href }}">{{ n }}</a>{%- else -%}<span class="muted">0</span>{%- endif -%}
+{%- endmacro %}
+
+<div class="card">
+  <table class="contact-table team-table">
+    <thead>
+      <tr>
+        <th>Person</th><th>Open tasks</th><th>Overdue</th><th>Done this week</th>
+        <th>Open leads</th><th>Quiet {{ stale_days }}+ days</th><th>Last on site</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+        <tr>
+          <td>{{ r.name }}</td>
+          <td>{{ cell(r.open_tasks, '/tasks?status=open&assigned_to=' ~ r.id) }}</td>
+          <td>{{ cell(r.overdue, '/tasks?status=open&assigned_to=' ~ r.id, true) }}</td>
+          <td>{{ cell(r.done_week, '/tasks?status=done&assigned_to=' ~ r.id) }}</td>
+          <td>{{ cell(r.open_leads, '/leads?status=open&assigned_to=' ~ r.id) }}</td>
+          <td>{{ cell(r.stale_leads, '/leads?status=open&assigned_to=' ~ r.id, true) }}</td>
+          <td class="meta">{{ ago(r.last_seen) if r.last_seen else 'never' }}</td>
+        </tr>
+      {% endfor %}
+      <tr class="group-row">
+        <td>{{ nobody.name }}</td>
+        <td>{{ cell(nobody.open_tasks, '/tasks?status=open&assigned_to=none') }}</td>
+        <td>{{ cell(nobody.overdue, '/tasks?status=open&assigned_to=none', true) }}</td>
+        <td></td>
+        <td>{{ cell(nobody.open_leads, '/leads?status=open&assigned_to=none') }}</td>
+        <td>{{ cell(nobody.stale_leads, '/leads?status=open&assigned_to=none', true) }}</td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}

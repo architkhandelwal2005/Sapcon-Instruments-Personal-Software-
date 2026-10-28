@@ -14,7 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from app import history
+from app import history, updates
 from app.db import get_connection, release_connection
 from app.web.routes.entities import fetch_entity, fetch_interaction_history
 from app.web.auth import actor_of
@@ -46,7 +46,9 @@ def _predicate(*, status, assigned_to, source, actor=None) -> tuple[str, dict]:
     if status:
         where.append("l.status = %(status)s")
         params["status"] = status
-    if assigned_to:
+    if assigned_to == "none":
+        where.append("l.assigned_to is null")
+    elif assigned_to:
         where.append("l.assigned_to = %(assigned_to)s")
         params["assigned_to"] = assigned_to
     if source:
@@ -227,6 +229,9 @@ def lead_detail(request: Request, lead_id: str):
         entity = fetch_entity(conn, str(entity_id))
         meetings = fetch_interaction_history(conn, str(entity_id), actor=actor)
         changes = history.recent(conn, "lead", lead_id)
+        thread = updates.for_item(conn, "lead", lead_id)
+        updates.mark_item_read(conn, actor.entity_id, "lead", lead_id)
+        conn.commit()
         employees = [] if actor.is_employee() else _employee_options(conn)
     finally:
         release_connection(conn)
@@ -241,7 +246,7 @@ def lead_detail(request: Request, lead_id: str):
         request,
         "lead_detail.html",
         {"lead": lead, "history": meetings, "changes": changes, "employees": employees,
-         "statuses": STATUSES},
+         "statuses": STATUSES, "thread": thread, "kind": "lead", "item_id": lead_id},
     )
 
 

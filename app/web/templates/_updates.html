@@ -1,0 +1,24 @@
+{# The running note on a task or a lead. Needs `thread`, `kind`, `item_id`.
+   Writing one tells the owner, the office and whoever the work belongs to. #}
+<h2 id="updates">Updates</h2>
+<div class="card">
+  {% if thread %}
+    <ul class="updates">
+      {% for u in thread %}
+        <li>
+          <div class="update-head"><strong>{{ u.author_name or 'Someone' }}</strong> <span class="meta">{{ ago(u.created_at) }}</span></div>
+          <div class="update-body">{{ u.body }}</div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">No updates yet.</p>
+  {% endif %}
+  <form method="post" action="/updates" class="update-form">
+    <input type="hidden" name="kind" value="{{ kind }}">
+    <input type="hidden" name="item_id" value="{{ item_id }}">
+    <textarea name="body" rows="2" required maxlength="2000"
+              placeholder="What happened? e.g. Called, they want 5% off - revising quote Monday"></textarea>
+    <button type="submit" class="btn-confirm">Post update</button>
+  </form>
+</div>

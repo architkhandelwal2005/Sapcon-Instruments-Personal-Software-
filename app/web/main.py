@@ -18,8 +18,9 @@ from app.web.policy import is_public, role_allows
 from app.web.templating import templates
 from app.web.routes import (
     admin, ask, captures, contacts, entities, history, ingest, leads, login, meetings, review, tasks,
-    whatsapp,
+    team, updates, whatsapp,
 )
+from app.updates import unread_count
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -43,6 +44,8 @@ app.include_router(whatsapp.router)
 app.include_router(login.router)
 app.include_router(admin.router)
 app.include_router(history.router)
+app.include_router(team.router)
+app.include_router(updates.router)
 
 
 @app.middleware("http")
@@ -56,6 +59,9 @@ async def require_login(request: Request, call_next):
     conn = get_connection()
     try:
         actor = load_actor(conn, request.cookies.get(COOKIE_NAME))
+        # The bell on every page. Counted here, on the connection already
+        # open for the sign-in check, rather than by each page.
+        request.state.unread = unread_count(conn, actor.entity_id) if actor else 0
     finally:
         release_connection(conn)
 

@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Notifications - Sapcon CRM{% endblock %}
+{% block content %}
+
+<h1>Notifications</h1>
+
+{% if items %}
+  {% if unread %}
+    <form method="post" action="/notifications/read" class="review-actions">
+      <button type="submit">Mark all as read</button>
+    </form>
+  {% endif %}
+  <div class="card">
+    <ul class="notices">
+      {% for n in items %}
+        <li class="{% if not n.read %}unread{% endif %}">
+          <a href="{{ n.url }}">{{ n.body }}</a>
+          <span class="meta">{{ ago(n.created_at) }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+{% else %}
+  <p class="empty">Nothing yet. New work given to you, and updates on your work, will show up here.</p>
+{% endif %}
+
+{% endblock %}

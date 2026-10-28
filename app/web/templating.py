@@ -16,7 +16,8 @@ TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
 def _actor(request: Request) -> dict:
     """None on the login and enrol pages, which render before anyone is known."""
-    return {"actor": getattr(request.state, "actor", None)}
+    return {"actor": getattr(request.state, "actor", None),
+            "unread": getattr(request.state, "unread", 0)}
 
 
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR), context_processors=[_actor])

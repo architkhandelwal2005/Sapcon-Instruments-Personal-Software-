@@ -21,19 +21,32 @@
   <a class="entity-link" href="/tasks">Clear</a>
 </form>
 
-{% if rows %}
+{% if groups %}
   <div class="card">
     <table class="contact-table">
       <thead>
         <tr><th>Task</th><th>About</th><th>Assigned</th><th>Due</th><th>Status</th><th></th></tr>
       </thead>
       <tbody>
-        {% for t in rows %}
-          <tr>
+        {% for g in groups %}
+          {% if g.progress %}
+            {# One voice note that gave several instructions, shown as one
+               piece of work with how far along it is. #}
+            <tr class="group-row">
+              <td colspan="6">
+                <a class="entity-link" href="/meetings/{{ g.meeting_id }}">Note of {{ g.progress.date.strftime('%d %b') }}</a>
+                &middot; <strong>{{ g.progress.done }} of {{ g.progress.total }} done</strong>
+                <span class="progress"><span style="width: {{ (100 * g.progress.done / g.progress.total)|round|int }}%"></span></span>
+              </td>
+            </tr>
+          {% endif %}
+          {% for t in g.rows %}
+          <tr{% if g.progress %} class="in-group"{% endif %}>
             <td>
-              {{ t.description }}
+              <a class="task-link" href="/tasks/{{ t.id }}">{{ t.description }}</a>
               {% if t.review_status == "pending" %}<span class="badge badge-pending">unconfirmed</span>{% endif %}
-              {% if t.meeting_id %}<div class="meta"><a class="entity-link" href="/meetings/{{ t.meeting_id }}">from meeting</a></div>{% endif %}
+              {% if t.updates %}<div class="meta"><a class="entity-link" href="/tasks/{{ t.id }}#updates">{{ t.updates }} update{{ 's' if t.updates != 1 }}</a></div>
+              {% elif t.meeting_id and not g.progress %}<div class="meta"><a class="entity-link" href="/meetings/{{ t.meeting_id }}">from meeting</a></div>{% endif %}
             </td>
             <td>{% if t.related_entity_id %}<a class="entity-link" href="/entities/{{ t.related_entity_id }}">{{ t.related_entity_name }}</a>{% else %}&mdash;{% endif %}</td>
             <td>
@@ -55,7 +68,7 @@
                 </form>
               {% endif %}
             </td>
-            <td>{{ t.due_date or "" }} {% if t.overdue %}<span class="badge badge-pending">overdue</span>{% endif %}</td>
+            <td>{{ t.due_date or "" }} {% if t.overdue %}<span class="badge badge-overdue">overdue</span>{% endif %}</td>
             <td><span class="badge {% if t.status == 'done' %}badge-direct{% else %}badge-tag{% endif %}">{{ t.status }}</span></td>
             <td>
               <form method="post" action="/tasks/{{ t.id }}/status">
@@ -70,6 +83,7 @@
               </form>
             </td>
           </tr>
+          {% endfor %}
         {% endfor %}
       </tbody>
     </table>

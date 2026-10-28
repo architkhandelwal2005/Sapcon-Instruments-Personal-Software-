@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Task - Sapcon CRM{% endblock %}
+{% block content %}
+
+<p class="meta"><a class="entity-link" href="/tasks">&larr; All tasks</a></p>
+<h1>{{ task.description }}</h1>
+
+<div class="meta">
+  <div>Status:
+    <span class="badge {% if task.status == 'done' %}badge-direct{% else %}badge-tag{% endif %}">{{ task.status }}</span>
+    {% if task.overdue %}<span class="badge badge-overdue">overdue</span>{% endif %}
+    {% if task.review_status == "pending" %}<span class="badge badge-pending">unconfirmed</span>{% endif %}
+  </div>
+  <div>For: {% for a in task.assignees %}{{ a.name }}{% if not loop.last %}, {% endif %}{% else %}nobody yet{% endfor %}</div>
+  {% if task.due_date %}<div>Due: {{ task.due_date.strftime('%d %b %Y') }}</div>{% endif %}
+  {% if task.related_entity_id %}<div>About: <a class="entity-link" href="/entities/{{ task.related_entity_id }}">{{ task.related_entity_name }}</a></div>{% endif %}
+  {% if task.meeting_id %}<div>From: <a class="entity-link" href="/meetings/{{ task.meeting_id }}">note of {{ task.meeting_date.strftime('%d %b') if task.meeting_date else 'meeting' }}</a></div>{% endif %}
+</div>
+
+<form method="post" action="/tasks/{{ task.id }}/status" class="review-actions">
+  <input type="hidden" name="back" value="/tasks/{{ task.id }}">
+  {% if task.status == "done" %}
+    <input type="hidden" name="status" value="open">
+    <button type="submit">Reopen</button>
+  {% else %}
+    <input type="hidden" name="status" value="done">
+    <button type="submit" class="btn-confirm">Mark done</button>
+  {% endif %}
+</form>
+
+{% if siblings %}
+  <h2>Same note &middot; {{ siblings_done }} of {{ siblings|length }} done</h2>
+  <div class="card">
+    <ul class="checklist">
+      {% for s in siblings %}
+        <li class="{% if s.status == 'done' %}is-done{% endif %}{% if s.current %} is-current{% endif %}">
+          <span class="tick">{% if s.status == 'done' %}&#10003;{% else %}&#9675;{% endif %}</span>
+          {% if s.current %}{{ s.description }}{% else %}<a class="entity-link" href="/tasks/{{ s.id }}">{{ s.description }}</a>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+{% endif %}
+
+{% include "_updates.html" %}
+{% include "_changes.html" %}
+
+{% endblock %}

@@ -10,6 +10,7 @@ def _client(monkeypatch, role):
     monkeypatch.setattr(main, "get_connection", lambda: None)
     monkeypatch.setattr(main, "release_connection", lambda conn: None)
     monkeypatch.setattr(main, "load_actor", lambda conn, token: Actor("e1", "Anshul", role))
+    monkeypatch.setattr(main, "unread_count", lambda conn, who: 0)
     return TestClient(main.app, follow_redirects=False)
 
 

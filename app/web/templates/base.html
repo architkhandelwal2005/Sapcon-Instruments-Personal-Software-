@@ -17,12 +17,14 @@
       {% set role = actor.role %}
       {% if role != 'employee' %}<a href="/meetings">Meetings</a>{% endif %}
       {% if role != 'employee' %}<a href="/contacts">Contacts</a>{% endif %}
-      <a href="/leads">Leads</a>
+      {% if role != 'employee' %}<a href="/team">Team</a>{% endif %}
       <a href="/tasks">Tasks</a>
+      <a href="/leads">Leads</a>
       {% if role != 'employee' %}<a href="/ask">Ask</a>{% endif %}
       {% if role != 'employee' %}<a href="/review">Review</a>{% endif %}
       <a href="/meetings/new">New meeting</a>
       {% if role == 'owner' %}<a href="/admin/users">People</a>{% endif %}
+      <a href="/notifications" class="bell" aria-label="Notifications{% if unread %}, {{ unread }} unread{% endif %}">&#128276;{% if unread %}<span class="bell-count">{{ unread if unread < 100 else '99+' }}</span>{% endif %}</a>
       <span class="site-user">
         {{ actor.name }}<span class="muted"> ({{ actor.role }})</span>
         <form method="post" action="/logout"><button type="submit" class="linkish">Sign out</button></form>

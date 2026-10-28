@@ -44,11 +44,14 @@ POLICY: dict[str, tuple[str, ...]] = {
     "/captures/new": ALL,
     "/entities": ALL,           # a row check in the handler decides which ones
     "/history": ALL,            # undo; an employee may only undo their own changes
+    "/updates": ALL,            # writing on a task or lead; the handler checks it is theirs
+    "/notifications": ALL,      # each person's own bell
 
     # The whole book and the relationship graph are the asset that leaves with
     # someone who leaves.
     "/contacts": STAFF,
     "/review": STAFF,
+    "/team": STAFF,             # everyone's workload side by side
 
     # Free-text questions over partially-scoped retrieval is the easiest way to
     # leak the whole book: one missed filter in one query and "summarise our

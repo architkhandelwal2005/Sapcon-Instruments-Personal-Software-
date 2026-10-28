@@ -31,8 +31,9 @@ header.site-header {
   padding: 0.9rem 1rem;
   border-bottom: 1px solid var(--border);
   display: flex;
+  flex-wrap: wrap;          /* on a phone the links take two lines, not a sideways scroll */
   align-items: center;
-  justify-content: space-between;
+  gap: 0.4rem 1rem;
 }
 
 header.site-header a {
@@ -42,7 +43,6 @@ header.site-header a {
 }
 
 header.site-header a + a {
-  margin-left: 1rem;
   font-weight: 500;
 }
 
@@ -671,3 +671,46 @@ details.edit-panel[open] > summary { margin-bottom: 0.8rem; }
 
 .flag-actions { margin: 0.5rem 0 1rem; }
 .flag-actions form { margin: 0; }
+
+/* --- team, task groups, updates, notifications -------------------------- */
+.badge-overdue { background: var(--overdue-bg); color: var(--overdue); }
+.site-header .bell { position: relative; text-decoration: none; font-size: 1.1rem; margin-right: 0.9rem; }
+.bell-count {
+  position: absolute; top: -0.4rem; right: -0.7rem; min-width: 1.1rem; padding: 0 0.25rem;
+  border-radius: 999px; background: var(--overdue); color: #fff;
+  font-size: 0.7rem; line-height: 1.1rem; text-align: center; font-weight: 600;
+}
+tr.group-row td { background: var(--bg); border-top: 2px solid var(--border); font-size: 0.9rem; }
+tr.in-group td:first-child { padding-left: 1.25rem; }
+.progress {
+  display: inline-block; vertical-align: middle; width: 5rem; height: 0.4rem; margin-left: 0.5rem;
+  border-radius: 999px; background: var(--border); overflow: hidden;
+}
+.progress span { display: block; height: 100%; background: var(--accent); }
+a.task-link { color: inherit; text-decoration: none; }
+a.task-link:hover { text-decoration: underline; }
+a.warn { color: var(--overdue); font-weight: 600; }
+.team-table td:not(:first-child), .team-table th:not(:first-child) { text-align: center; }
+ul.checklist, ul.updates, ul.notices { list-style: none; margin: 0; padding: 0; }
+ul.checklist li { padding: 0.35rem 0; display: flex; gap: 0.5rem; }
+ul.checklist li.is-done { color: var(--muted); text-decoration: line-through; }
+ul.checklist li.is-current { font-weight: 600; }
+ul.checklist .tick { width: 1rem; color: var(--accent); text-decoration: none; }
+ul.updates li { padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+ul.updates li:last-child { border-bottom: 0; }
+.update-body { white-space: pre-wrap; margin-top: 0.15rem; }
+.update-form { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
+.update-form textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 0.5rem; }
+.update-form button { align-self: flex-start; }
+ul.notices li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+ul.notices li:last-child { border-bottom: 0; }
+ul.notices li a { color: inherit; text-decoration: none; }
+ul.notices li.unread a { font-weight: 600; }
+ul.notices li.unread::before { content: ""; flex: 0 0 0.5rem; height: 0.5rem; margin-top: 0.45rem; border-radius: 50%; background: var(--accent); }
+ul.notices li .meta { white-space: nowrap; }
+@media (max-width: 640px) {
+  .team-table { font-size: 0.85rem; }
+  ul.notices li { flex-direction: column; gap: 0.15rem; }
+}
+/* A wide table scrolls inside its card, so the page itself never goes sideways on a phone. */
+.card { overflow-x: auto; }
