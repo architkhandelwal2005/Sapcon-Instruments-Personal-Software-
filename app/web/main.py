@@ -20,6 +20,7 @@ from app.web.routes import (
     admin, ask, captures, contacts, entities, history, ingest, leads, login, meetings, review, tasks,
     team, updates, whatsapp,
 )
+from app import mailer
 from app.updates import unread_count
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -46,6 +47,11 @@ app.include_router(admin.router)
 app.include_router(history.router)
 app.include_router(team.router)
 app.include_router(updates.router)
+
+
+@app.on_event("startup")
+def _start_mailer() -> None:
+    mailer.start()
 
 
 @app.middleware("http")

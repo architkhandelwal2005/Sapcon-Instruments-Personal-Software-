@@ -170,3 +170,19 @@ select cron.unschedule('keep-crm-awake');
 
 If the app ever moves to a new URL, unschedule this and schedule it again
 against the new `/health` - otherwise it keeps waking the old one.
+
+## Email notifications
+
+Notifications (new work, updates, tasks finished, leads won or lost) are emailed
+through Brevo's free tier (300 emails a day, no card). Unread notices are
+gathered for two minutes and sent as one email per person; anything read on the
+site in that time is not emailed. Only people with an email address on their
+record get mail.
+
+Set on Render (Environment) and in local `.env`:
+
+- `BREVO_API_KEY` - Brevo > SMTP & API > API Keys
+- `MAIL_FROM` - a sender address verified in Brevo > Senders
+- `MAIL_FROM_NAME` - optional, defaults to "Sapcon CRM"
+
+Without these the site works as before and notices stay behind the bell.
