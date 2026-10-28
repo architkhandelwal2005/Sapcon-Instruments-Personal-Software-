@@ -62,6 +62,11 @@ async def require_login(request: Request, call_next):
     if actor is None:
         target = path + (f"?{request.url.query}" if request.url.query else "")
         return RedirectResponse(f"/login?next={quote(target)}", status_code=303)
+    if path == "/" and actor.role == "employee":
+        # Where everyone lands after signing in. An employee's home is their
+        # own tasks; greeting them with "no access" made a good sign-in look
+        # like a failed one, and people signed in again and again.
+        return RedirectResponse("/tasks", status_code=303)
     if not role_allows(actor.role, path):
         return RedirectResponse("/tasks?error=You+do+not+have+access+to+that+page", status_code=303)
 
